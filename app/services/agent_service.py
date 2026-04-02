@@ -9,12 +9,15 @@ import json
 import logging
 from typing import Optional
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.feature import Feature
 from app.models.artifact import Artifact
 from app.models.message import Message
+from app.models.repository import Repository
 from app.config import get_provider
+from app.services.context_builder import build_agent_context
 
 logger = logging.getLogger(__name__)
 
@@ -205,10 +208,17 @@ async def run_agent_turn(
     # Get provider (Ollama or Bedrock)
     provider = get_provider()
 
-    # Load codebase context from project if available
-    from app.models.project import Project
-    project = db.get(Project, feature.project_id)
-    codebase_context = project.codebase_context or "" if project else ""
+    # Load rich multi-layered context (repos + architecture + knowledge + config)
+    codebase_context = build_agent_context(db, feature)
+
+    # Set search context for scoped codebase search
+    from core.tools.codebase.search_codebase import SearchCodebaseTool
+    repo_ids = [
+        str(r.id) for r in db.execute(
+            select(Repository).where(Repository.project_id == feature.project_id)
+        ).scalars().all()
+    ]
+    SearchCodebaseTool.set_context(project_id=str(feature.project_id), repo_ids=repo_ids)
 
     # Run the core agent loop
     from core.orchestrator.loop import agent_loop
@@ -276,9 +286,8 @@ async def run_approval_agent(
 
     provider = get_provider()
 
-    from app.models.project import Project
-    project = db.get(Project, feature.project_id)
-    codebase_context = project.codebase_context or "" if project else ""
+    # Load rich multi-layered context (repos + architecture + knowledge + config)
+    codebase_context = build_agent_context(db, feature)
 
     from core.orchestrator.loop import agent_loop
     result = await agent_loop(

@@ -1,15 +1,8 @@
 """
 Project service: handles GitHub clone, S3 upload, and codebase analysis.
 
-Flow:
-1. git clone from GitHub to /tmp (ephemeral)
-2. tar + upload to S3 (persistent)
-3. For analysis: download from S3 to /tmp/synapse/repos/{project_id}
-4. Run tree-sitter AST analysis
-5. Chunk and index in vector store
-6. Run KB Agent to generate architecture
-7. Save architecture artifact to DB
-8. Cleanup /tmp
+Supports both legacy single-repo (project_id scoped) and new multi-repo
+(project_id/repo_id scoped) storage patterns.
 """
 
 import os
@@ -28,26 +21,31 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-def clone_repo_to_s3(project_id: str, github_url: str, github_token: str = None) -> str:
+def clone_repo_to_s3(
+    project_id: str,
+    github_url: str,
+    github_token: str = None,
+    repo_id: str = None,
+) -> str:
     """Clone a GitHub repo and upload it to S3 as a tar.gz archive.
 
-    If github_token is provided, it's injected into the URL for private repo access.
-    Returns the S3 key for the uploaded archive.
+    If repo_id is provided, uses repos/{project_id}/{repo_id}/repo.tar.gz.
+    Otherwise falls back to legacy repos/{project_id}/repo.tar.gz.
     """
-    s3_key = f"{settings.s3_repos_prefix}/{project_id}/repo.tar.gz"
+    if repo_id:
+        s3_key = f"{settings.s3_repos_prefix}/{project_id}/{repo_id}/repo.tar.gz"
+    else:
+        s3_key = f"{settings.s3_repos_prefix}/{project_id}/repo.tar.gz"
 
     with tempfile.TemporaryDirectory() as tmpdir:
         clone_path = os.path.join(tmpdir, "repo")
 
-        # Build clone URL with token for private repos
         clone_url = github_url
         if github_token and "github.com" in github_url:
-            # https://github.com/org/repo -> https://{token}@github.com/org/repo
             clone_url = github_url.replace("https://", f"https://{github_token}@")
 
-        logger.info(f"Cloning {github_url} to {clone_path}")  # Log original URL, not the one with token
+        logger.info(f"Cloning {github_url} to {clone_path}")
 
-        # Clone (shallow for speed)
         result = subprocess.run(
             ["git", "clone", "--depth", "1", clone_url, clone_path],
             capture_output=True, text=True, timeout=120,
@@ -55,25 +53,24 @@ def clone_repo_to_s3(project_id: str, github_url: str, github_token: str = None)
         if result.returncode != 0:
             raise RuntimeError(f"git clone failed: {result.stderr}")
 
-        # Remove .git directory (not needed for analysis, saves S3 space)
         git_dir = os.path.join(clone_path, ".git")
         if os.path.exists(git_dir):
             shutil.rmtree(git_dir)
 
-        # Tar it up
         archive_path = os.path.join(tmpdir, "repo.tar.gz")
         with tarfile.open(archive_path, "w:gz") as tar:
             tar.add(clone_path, arcname="repo")
 
-        # Upload to S3
         try:
             s3 = boto3.client("s3", region_name=settings.aws_default_region)
             s3.upload_file(archive_path, settings.s3_bucket, s3_key)
             logger.info(f"Uploaded repo archive to s3://{settings.s3_bucket}/{s3_key}")
         except (ClientError, BotoCoreError, NoCredentialsError, Exception) as e:
-            # Fallback: save locally if S3 is not available (local dev)
             logger.warning(f"S3 upload failed ({e}), falling back to local storage")
-            local_path = Path(settings.local_repos_dir) / project_id
+            if repo_id:
+                local_path = Path(settings.local_repos_dir) / project_id / repo_id
+            else:
+                local_path = Path(settings.local_repos_dir) / project_id
             local_path.mkdir(parents=True, exist_ok=True)
             shutil.copytree(clone_path, str(local_path / "repo"), dirs_exist_ok=True)
             return f"local://{local_path}/repo"
@@ -81,14 +78,13 @@ def clone_repo_to_s3(project_id: str, github_url: str, github_token: str = None)
     return f"s3://{settings.s3_bucket}/{s3_key}"
 
 
-def download_repo_from_s3(project_id: str, s3_key: str) -> str:
-    """Download and extract repo from S3 to a local temp directory.
+def download_repo_from_s3(project_id: str, s3_key: str, repo_id: str = None) -> str:
+    """Download and extract repo from S3 to a local temp directory."""
+    if repo_id:
+        local_repo_path = Path(settings.local_repos_dir) / project_id / repo_id / "repo"
+    else:
+        local_repo_path = Path(settings.local_repos_dir) / project_id / "repo"
 
-    Returns the local path to the extracted repo.
-    """
-    local_repo_path = Path(settings.local_repos_dir) / project_id / "repo"
-
-    # If already extracted locally, reuse it
     if local_repo_path.exists():
         logger.info(f"Repo already cached at {local_repo_path}")
         return str(local_repo_path)
@@ -96,10 +92,8 @@ def download_repo_from_s3(project_id: str, s3_key: str) -> str:
     local_repo_path.parent.mkdir(parents=True, exist_ok=True)
 
     if s3_key.startswith("local://"):
-        # Local fallback: repo is already on disk
         return s3_key.replace("local://", "")
 
-    # Download from S3
     archive_path = str(local_repo_path.parent / "repo.tar.gz")
     actual_s3_key = s3_key.replace(f"s3://{settings.s3_bucket}/", "")
 
@@ -109,11 +103,9 @@ def download_repo_from_s3(project_id: str, s3_key: str) -> str:
     except ClientError as e:
         raise RuntimeError(f"Failed to download repo from S3: {e}")
 
-    # Extract
     with tarfile.open(archive_path, "r:gz") as tar:
         tar.extractall(path=str(local_repo_path.parent))
 
-    # Cleanup archive
     os.remove(archive_path)
 
     logger.info(f"Extracted repo to {local_repo_path}")
@@ -121,10 +113,7 @@ def download_repo_from_s3(project_id: str, s3_key: str) -> str:
 
 
 def build_context_summary(analysis: dict, repo_path: str) -> str:
-    """Build a compact codebase summary for the agent system prompt.
-
-    Reuses logic from code-to-arc/main.py _build_context_summary().
-    """
+    """Build a compact codebase summary for the agent system prompt."""
     from collections import defaultdict
 
     results = analysis.get("results", [])
@@ -162,9 +151,12 @@ def build_context_summary(analysis: dict, repo_path: str) -> str:
     return summary[:8000]
 
 
-def cleanup_local_repo(project_id: str):
+def cleanup_local_repo(project_id: str, repo_id: str = None):
     """Remove locally cached repo to free disk space."""
-    local_path = Path(settings.local_repos_dir) / project_id
+    if repo_id:
+        local_path = Path(settings.local_repos_dir) / project_id / repo_id
+    else:
+        local_path = Path(settings.local_repos_dir) / project_id
     if local_path.exists():
         shutil.rmtree(str(local_path))
         logger.info(f"Cleaned up local repo cache at {local_path}")

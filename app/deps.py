@@ -20,6 +20,7 @@ class CurrentUser:
     id: UUID
     org_id: UUID
     role: str
+    name: str = ""
 
 
 def get_current_user(
@@ -50,6 +51,7 @@ def get_current_user(
         id=UUID(payload["sub"]),
         org_id=UUID(payload["org_id"]),
         role=payload.get("role", "admin"),
+        name=payload.get("name", ""),
     )
 
 
@@ -69,4 +71,5 @@ def get_optional_user(
         id=UUID(payload["sub"]),
         org_id=UUID(payload["org_id"]),
         role=payload.get("role", "admin"),
+        name=payload.get("name", ""),
     )

@@ -17,4 +17,6 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
     tool_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     tool_calls: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    user_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -19,7 +19,11 @@ Generate a technical implementation plan from an approved feature spec.
    - New files/modules to create
    - Risk assessment
    - Sub-task breakdown (each linkable to a Jira story)
-6. Store using `store_artifact` with type="plan", parent_id=spec_id.
+6. **Check project configuration** (provided in codebase context under "## Project Configuration"):
+   - If `unit_tests_enabled: true` for any repository, include subtasks for writing unit tests. For each service/module affected, add a subtask like "ST-0XX: Write unit tests for {Component}.{method}()" with the test file path and test framework (from `test_framework` config).
+   - If `unit_tests_enabled` is not set or false, do NOT include unit test subtasks.
+   - Note the `qa_mode` setting — if "manual" only, subtasks should not reference automated test setup.
+7. Store using `store_artifact` with type="plan", parent_id=spec_id.
 
 ## Output Schema
 Call `store_artifact` with type="plan", parent_id="<spec_artifact_id>" and content as JSON:

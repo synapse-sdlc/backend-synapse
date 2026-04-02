@@ -133,8 +133,20 @@ generate specs, create technical plans, and produce test cases.
                 print(f"  Turn {turn + 1}: nudging model to produce output...")
                 continue
 
-            # Auto-save if the model forgot to call store_artifact
+            # Extract artifact_id from store_artifact tool results (if agent already stored one)
             artifact_id = None
+            if has_stored:
+                for m in reversed(messages):
+                    if m.get("tool_name") == "store_artifact" and m["role"] == "tool":
+                        try:
+                            tool_result = json.loads(m["content"])
+                            artifact_id = tool_result.get("artifact_id")
+                            if artifact_id:
+                                break
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+
+            # Auto-save if the model forgot to call store_artifact
             final_content = response["content"].strip()
             if not final_content:
                 for m in reversed(messages):
@@ -160,16 +172,20 @@ generate specs, create technical plans, and produce test cases.
                 on_event({"type": "done", "turns": turn + 1, "artifact_id": artifact_id})
             return result
 
-        # Execute each tool call
-        for tool_call in response["tool_calls"]:
+        # Execute all tool calls in parallel (tools are async and independent)
+        async def _exec_tool(tc):
             try:
-                result = await registry.execute(
-                    tool_call["name"],
-                    tool_call["arguments"],
-                )
+                return await registry.execute(tc["name"], tc["arguments"])
             except Exception as e:
-                result = {"error": str(e)}
-                print(f"  [tool error] {tool_call['name']}: {e}")
+                print(f"  [tool error] {tc['name']}: {e}")
+                return {"error": str(e)}
+
+        import asyncio as _asyncio
+        results = await _asyncio.gather(*[
+            _exec_tool(tc) for tc in response["tool_calls"]
+        ])
+
+        for tool_call, result in zip(response["tool_calls"], results):
             if "error" in result and tool_call["name"] == "store_artifact":
                 print(f"  [store_artifact error] {result['error']}")
             if tool_call["name"] == "store_artifact" and "artifact_id" in result and on_event:

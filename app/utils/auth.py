@@ -27,7 +27,7 @@ def verify_password(password: str, hashed: str) -> bool:
     return pwd_context.verify(password, hashed)
 
 
-def create_access_token(user_id: uuid.UUID, org_id: uuid.UUID, role: str) -> str:
+def create_access_token(user_id: uuid.UUID, org_id: uuid.UUID, role: str, name: str = "") -> str:
     """Create a JWT access token.
 
     Payload includes user_id, org_id, and role so the backend can
@@ -38,6 +38,7 @@ def create_access_token(user_id: uuid.UUID, org_id: uuid.UUID, role: str) -> str
         "sub": str(user_id),
         "org_id": str(org_id),
         "role": role,
+        "name": name,
         "exp": expires,
         "iat": datetime.utcnow(),
     }

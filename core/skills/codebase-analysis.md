@@ -129,6 +129,16 @@ Call `store_artifact` with type="architecture" and content as JSON:
   ]
 }
 
+## Merging with Existing Architecture
+
+If the codebase context includes an "Existing Architecture Document (provided by team)" section:
+1. Read it carefully first — this is ground truth from the team.
+2. Use it as your starting framework for the output.
+3. VALIDATE claims against the actual codebase (grep for mentioned files, models, routes).
+4. ADD what you discover that isn't in the document.
+5. CORRECT anything in the document that contradicts the codebase.
+6. PRESERVE all information from the uploaded document unless you can prove it's wrong.
+
 ## Quality Checklist
 - [ ] ALL directories explored (not just top-level)
 - [ ] ALL model/schema classes documented with their fields

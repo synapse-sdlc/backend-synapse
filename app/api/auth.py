@@ -53,7 +53,7 @@ def signup(body: SignupRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    token = create_access_token(user.id, org.id, user.role)
+    token = create_access_token(user.id, org.id, user.role, name=user.name)
     return TokenResponse(access_token=token)
 
 
@@ -63,7 +63,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    token = create_access_token(user.id, user.org_id, user.role)
+    token = create_access_token(user.id, user.org_id, user.role, name=user.name)
     return TokenResponse(access_token=token)
 
 
@@ -115,8 +115,10 @@ def invite_member(
     db.commit()
     db.refresh(user)
 
+    import logging
+    logging.getLogger(__name__).info(f"Invited {email} as {role} (temp password generated, deliver securely)")
+
     return {
-        "message": f"Invited {email} as {role}",
+        "message": f"Invited {email} as {role}. Temporary password has been generated.",
         "user_id": str(user.id),
-        "temp_password": temp_password,  # In production: send via email, not in response
     }

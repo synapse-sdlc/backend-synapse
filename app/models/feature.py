@@ -20,4 +20,5 @@ class Feature(Base):
     spec_artifact_id: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
     plan_artifact_id: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
     tests_artifact_id: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    jira_epic_key: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

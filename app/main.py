@@ -11,8 +11,16 @@ import app.models.project  # noqa: F401
 import app.models.feature  # noqa: F401
 import app.models.artifact  # noqa: F401
 import app.models.message  # noqa: F401
+import app.models.repository  # noqa: F401
+import app.models.jira_config  # noqa: F401
+import app.models.jira_issue_link  # noqa: F401
+import app.models.pr_link  # noqa: F401
+import app.models.knowledge_entry  # noqa: F401
+import app.models.api_contract  # noqa: F401
+import app.models.shared_model  # noqa: F401
 
-from app.api import auth, projects, features, artifacts, stream, health
+from app.api import auth, projects, features, artifacts, stream, health, repositories
+from app.api import jira, pull_requests, knowledge
 
 
 @asynccontextmanager
@@ -37,4 +45,8 @@ app.include_router(auth.router, prefix="/api", tags=["auth"])
 app.include_router(projects.router, prefix="/api", tags=["projects"])
 app.include_router(features.router, prefix="/api", tags=["features"])
 app.include_router(artifacts.router, prefix="/api", tags=["artifacts"])
+app.include_router(repositories.router, prefix="/api", tags=["repositories"])
+app.include_router(jira.router, prefix="/api", tags=["jira"])
+app.include_router(pull_requests.router, prefix="/api", tags=["pull-requests"])
+app.include_router(knowledge.router, prefix="/api", tags=["knowledge"])
 app.include_router(stream.router, prefix="/api", tags=["stream"])

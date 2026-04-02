@@ -17,6 +17,7 @@ class FeatureResponse(BaseModel):
     spec_artifact_id: Optional[str]
     plan_artifact_id: Optional[str]
     tests_artifact_id: Optional[str]
+    jira_epic_key: Optional[str] = None
     created_at: datetime
 
     class Config:
@@ -33,7 +34,13 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     tool_name: Optional[str]
+    user_id: Optional[UUID] = None
+    user_name: Optional[str] = None
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class RejectRequest(BaseModel):
+    reason: str

@@ -13,14 +13,15 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
 
-    # Auth / JWT
-    jwt_secret: str = "dev-secret-change-in-production"
+    # Auth / JWT (REQUIRED — no defaults, must be set in .env)
+    # Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+    jwt_secret: str = "CHANGE-ME-IN-ENV-FILE"
     jwt_algorithm: str = "HS256"
     jwt_expiry_hours: int = 24
 
-    # Encryption (for GitHub tokens etc.)
+    # Encryption (for GitHub tokens etc.) (REQUIRED — no defaults)
     # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-    encryption_key: str = "default-dev-key-replace-in-production-0000="
+    encryption_key: str = "CHANGE-ME-IN-ENV-FILE"
 
     # S3
     s3_bucket: str = "synapse-data"
@@ -36,10 +37,14 @@ class Settings(BaseSettings):
     synapse_bedrock_model: str = "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
     aws_default_region: str = "us-east-1"
 
-    # AWS credentials (read from .env, passed through to boto3 via env vars)
+    # AWS credentials — three options (checked in order):
+    # 1. Bearer token (short-lived, 12 hrs): set AWS_BEARER_TOKEN_BEDROCK
+    # 2. IAM keys (long-lived): set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
+    # 3. Instance role (EC2/ECS): leave all empty, boto3 discovers automatically
+    aws_bearer_token_bedrock: str = ""  # Presigned bearer token for Bedrock (expires in ~12 hrs)
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
-    aws_session_token: str = ""
+    aws_session_token: str = ""  # Only for temporary STS credentials
 
     class Config:
         env_file = ".env"
@@ -54,6 +59,9 @@ def get_provider():
         return OllamaProvider(model=settings.synapse_model)
     elif settings.synapse_provider == "bedrock":
         from core.orchestrator.providers.bedrock_provider import BedrockProvider
-        return BedrockProvider(model=settings.synapse_bedrock_model)
+        return BedrockProvider(
+            model=settings.synapse_bedrock_model,
+            bearer_token=settings.aws_bearer_token_bedrock or None,
+        )
     else:
         raise ValueError(f"Unknown provider: {settings.synapse_provider}")

@@ -5,29 +5,56 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.artifact import Artifact
 from app.schemas.artifact import ArtifactResponse
+from app.deps import get_current_user, CurrentUser
 
 router = APIRouter()
 
 
 @router.get("/artifacts/{artifact_id}", response_model=ArtifactResponse)
-def get_artifact(artifact_id: str, db: Session = Depends(get_db)):
+def get_artifact(
+    artifact_id: str,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
     artifact = db.get(Artifact, artifact_id)
     if not artifact:
         raise HTTPException(status_code=404, detail="Artifact not found")
+    # Org isolation: verify artifact's project belongs to user's org
+    if artifact.project_id:
+        from app.models.project import Project
+        project = db.get(Project, artifact.project_id)
+        if project and project.org_id and project.org_id != user.org_id:
+            raise HTTPException(status_code=404, detail="Artifact not found")
     return artifact
 
 
 @router.get("/artifacts/{artifact_id}/trace")
-def get_trace(artifact_id: str, db: Session = Depends(get_db)):
+def get_trace(
+    artifact_id: str,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
     """Walk the parent chain and find children to build the traceability graph."""
     artifact = db.get(Artifact, artifact_id)
     if not artifact:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
-    # Walk up the parent chain
+    # Org isolation
+    if artifact.project_id:
+        from app.models.project import Project
+        project = db.get(Project, artifact.project_id)
+        if project and project.org_id and project.org_id != user.org_id:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+
+    # Walk up the parent chain (with depth limit to prevent infinite loops)
     chain = []
     current = artifact
-    while current:
+    max_depth = 50
+    seen = set()
+    while current and max_depth > 0:
+        if current.id in seen:
+            break  # Cycle detected
+        seen.add(current.id)
         chain.insert(0, {
             "id": current.id,
             "type": current.type,
@@ -40,6 +67,7 @@ def get_trace(artifact_id: str, db: Session = Depends(get_db)):
             current = db.get(Artifact, current.parent_id)
         else:
             current = None
+        max_depth -= 1
 
     # Find children of the original artifact
     result = db.execute(

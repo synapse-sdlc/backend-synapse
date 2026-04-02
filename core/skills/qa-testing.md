@@ -73,6 +73,13 @@ Call `store_artifact` with type="tests" and content as JSON:
 }
 ```
 
+## Configuration Awareness
+Check the project configuration (provided in codebase context under "## Project Configuration"):
+- If `unit_tests_enabled: true`, add a `"unit_test"` test suite type with test cases that verify code-level behavior (function inputs/outputs, error handling, edge cases). Use the `test_framework` value (pytest, jest, etc.) to format expected test structure.
+- If `qa_mode` is `"manual"`, generate ONLY manual test steps — do NOT set `"automated": true` on any test case.
+- If `qa_mode` is `"automated"`, include code-level test expectations with expected function signatures, assertions, and mock setup.
+- If `qa_mode` is `"both"` (default), generate both manual and automated test cases.
+
 ## Guidelines
 - Every acceptance criterion from the spec MUST have at least one test case
 - Edge cases from the spec MUST each have a dedicated test case
