@@ -1,12 +1,18 @@
 import json
+import time
+import logging
 from core.orchestrator.providers.base import LLMProvider
 from core.tools.registry import ToolRegistry
 from core.orchestrator.skill_loader import load_skill
+
+logger = logging.getLogger("synapse.orchestrator")
 
 # Approximate chars per token (conservative estimate)
 CHARS_PER_TOKEN = 4
 # Target context budget for messages (leave room for system prompt + response)
 MAX_CONTEXT_CHARS = 180_000  # ~45k tokens
+
+NUDGE_SENTINEL = "__SYNAPSE_NUDGE_PRODUCE_OUTPUT__"
 
 
 async def agent_loop(
@@ -66,9 +72,10 @@ generate specs, create technical plans, and produce test cases.
     registry = ToolRegistry()
     tool_definitions = registry.get_definitions()
 
+    loop_start = time.monotonic()
     for turn in range(max_turns):
         # Context management: compress old tool results if conversation is too large
-        _compress_context(messages)
+        _compress_context(messages, system_prompt_len=len(system_prompt))
 
         # Call LLM
         response = await provider.chat(
@@ -81,12 +88,12 @@ generate specs, create technical plans, and produce test cases.
         # Debug: show what the model is doing each turn
         tool_names = [tc["name"] for tc in response["tool_calls"]]
         if tool_names:
-            print(f"  Turn {turn + 1}: calling {', '.join(tool_names)}")
+            logger.info(f"Turn {turn + 1}: calling {', '.join(tool_names)}")
             if on_event:
                 on_event({"type": "tool_call", "tools": tool_names, "turn": turn + 1})
         else:
             preview = (response["content"] or "")[:100]
-            print(f"  Turn {turn + 1}: finished — {preview}{'...' if len(response['content'] or '') > 100 else ''}")
+            logger.info(f"Turn {turn + 1}: finished — {preview}{'...' if len(response['content'] or '') > 100 else ''}")
 
         # Append assistant response
         messages.append({
@@ -120,17 +127,17 @@ generate specs, create technical plans, and produce test cases.
             # If the model returned empty/short content and hasn't stored anything,
             # nudge it ONCE to continue and produce the final artifact
             already_nudged = any(
-                m["role"] == "user" and "haven't produced" in m.get("content", "")
+                m["role"] == "user" and NUDGE_SENTINEL in m.get("content", "")
                 for m in messages
             )
             if not has_stored and len(content) < 50 and turn < max_turns - 1 and not already_nudged:
                 messages.append({
                     "role": "user",
-                    "content": "You haven't produced your final output yet. "
+                    "content": f"{NUDGE_SENTINEL} You haven't produced your final output yet. "
                                "Please synthesize all the information you've gathered "
                                "and call store_artifact with the complete structured result now.",
                 })
-                print(f"  Turn {turn + 1}: nudging model to produce output...")
+                logger.info(f"Turn {turn + 1}: nudging model to produce output")
                 continue
 
             # Extract artifact_id from store_artifact tool results (if agent already stored one)
@@ -160,7 +167,7 @@ generate specs, create technical plans, and produce test cases.
                     "content": final_content,
                 })
                 artifact_id = save_result.get("artifact_id")
-                print(f"  [auto-saved artifact: {artifact_id}]")
+                logger.info(f"Auto-saved artifact: {artifact_id}")
 
             result = {
                 "final_response": final_content or response["content"],
@@ -168,6 +175,8 @@ generate specs, create technical plans, and produce test cases.
                 "messages": messages,
                 "artifact_id": artifact_id,
             }
+            elapsed = time.monotonic() - loop_start
+            logger.info(f"Agent loop completed in {elapsed:.1f}s ({turn + 1} turns, artifact={artifact_id})")
             if on_event:
                 on_event({"type": "done", "turns": turn + 1, "artifact_id": artifact_id})
             return result
@@ -177,7 +186,18 @@ generate specs, create technical plans, and produce test cases.
             try:
                 return await registry.execute(tc["name"], tc["arguments"])
             except Exception as e:
-                print(f"  [tool error] {tc['name']}: {e}")
+                # Retry once on transient errors
+                err_msg = str(e).lower()
+                if any(k in err_msg for k in ("timeout", "connection", "429", "503")):
+                    logger.warning(f"Tool {tc['name']} transient error, retrying in 2s: {e}")
+                    import asyncio as _aio
+                    await _aio.sleep(2)
+                    try:
+                        return await registry.execute(tc["name"], tc["arguments"])
+                    except Exception as e2:
+                        logger.warning(f"Tool {tc['name']} retry failed: {e2}")
+                        return {"error": str(e2)}
+                logger.warning(f"Tool error {tc['name']}: {e}")
                 return {"error": str(e)}
 
         import asyncio as _asyncio
@@ -187,7 +207,7 @@ generate specs, create technical plans, and produce test cases.
 
         for tool_call, result in zip(response["tool_calls"], results):
             if "error" in result and tool_call["name"] == "store_artifact":
-                print(f"  [store_artifact error] {result['error']}")
+                logger.error(f"store_artifact error: {result['error']}")
             if tool_call["name"] == "store_artifact" and "artifact_id" in result and on_event:
                 on_event({"type": "artifact_stored", "artifact_id": result["artifact_id"], "turn": turn + 1})
             messages.append({
@@ -199,28 +219,40 @@ generate specs, create technical plans, and produce test cases.
     return {"final_response": "Max turns reached", "turns": max_turns, "messages": messages, "artifact_id": None}
 
 
-def _compress_context(messages: list[dict]):
-    """Compress old tool results when conversation gets too large.
+def _compress_context(messages: list[dict], system_prompt_len: int = 0):
+    """Compress conversation when it exceeds the context budget.
 
-    Strategy: keep the most recent tool results full, but summarize older ones.
-    This prevents context overflow while preserving the model's recent working memory.
+    Strategy (multi-pass, increasingly aggressive):
+    1. Compress old tool results (>200 chars, outside last 8 messages)
+    2. Compress old assistant messages (long reasoning, outside last 8)
+    3. Compress get_artifact results (large JSON artifacts anywhere except last 4)
+
+    The budget accounts for system prompt size so we don't overflow the LLM context.
     """
+    # Actual available budget = total - system prompt - response tokens
+    available = MAX_CONTEXT_CHARS - system_prompt_len - (16384 * CHARS_PER_TOKEN)
+    if available < 50000:
+        available = 50000  # Floor: always keep at least 50K for history
+
     total_chars = sum(len(m.get("content", "") or "") for m in messages)
-    if total_chars < MAX_CONTEXT_CHARS:
+    if total_chars < available:
         return
 
+    target = int(available * 0.7)
     compressed = 0
-    # Work backwards — keep the last 6 messages untouched (recent context)
-    # Compress tool results from oldest to newest
-    for i in range(len(messages) - 6):
+    keep_recent = 8  # Protect last 8 messages
+
+    # Pass 1: Compress old tool results (oldest first, >200 chars)
+    for i in range(max(0, len(messages) - keep_recent)):
+        if total_chars - compressed < target:
+            break
         m = messages[i]
         if m["role"] != "tool":
             continue
         content = m.get("content", "")
-        if len(content) <= 500:
+        if len(content) <= 200 or m.get("_compressed"):
             continue
 
-        # Summarize the tool result
         tool_name = m.get("tool_name", "unknown")
         try:
             data = json.loads(content)
@@ -230,15 +262,53 @@ def _compress_context(messages: list[dict]):
 
         old_len = len(content)
         messages[i]["content"] = json.dumps({"_compressed": True, "summary": summary})
+        messages[i]["_compressed"] = True
         compressed += old_len - len(messages[i]["content"])
 
-        # Check if we've compressed enough
-        total_chars -= compressed
-        if total_chars < MAX_CONTEXT_CHARS * 0.7:
-            break
+    # Pass 2: Compress long assistant messages (>1000 chars, outside recent)
+    if total_chars - compressed > target:
+        for i in range(max(0, len(messages) - keep_recent)):
+            if total_chars - compressed < target:
+                break
+            m = messages[i]
+            if m["role"] != "assistant" or m.get("_compressed"):
+                continue
+            content = m.get("content", "")
+            if len(content) <= 1000:
+                continue
+            # Keep first 300 chars of agent reasoning
+            old_len = len(content)
+            messages[i]["content"] = content[:300] + f"\n[...{len(content) - 300} chars truncated]"
+            messages[i]["_compressed"] = True
+            compressed += old_len - len(messages[i]["content"])
+
+    # Pass 3: Compress get_artifact results (large artifact JSON, anywhere except last 4)
+    if total_chars - compressed > target:
+        for i in range(max(0, len(messages) - 4)):
+            if total_chars - compressed < target:
+                break
+            m = messages[i]
+            if m.get("tool_name") != "get_artifact" or m.get("_compressed"):
+                continue
+            content = m.get("content", "")
+            if len(content) <= 2000:
+                continue
+            try:
+                data = json.loads(content)
+                art_type = data.get("type", "?")
+                art_name = data.get("name", "?")
+                art_id = data.get("id", "?")
+                summary = f"[Retrieved {art_type} artifact: {art_name} (ID: {art_id}) — full content compressed, use get_artifact to re-read if needed]"
+            except (json.JSONDecodeError, TypeError):
+                summary = f"[Artifact content: {len(content)} chars — compressed]"
+
+            old_len = len(content)
+            messages[i]["content"] = summary
+            messages[i]["_compressed"] = True
+            compressed += old_len - len(messages[i]["content"])
 
     if compressed > 0:
-        print(f"  [context] compressed {compressed:,} chars from old tool results")
+        logger.info(f"Context compressed: {compressed:,} chars (budget: {available:,}, history: {total_chars - compressed:,})")
 
 
 def _summarize_tool_result(tool_name: str, data: dict) -> str:
@@ -275,6 +345,12 @@ def _summarize_tool_result(tool_name: str, data: dict) -> str:
 
     if tool_name == "store_artifact":
         return f"Stored artifact: {data.get('artifact_id', '?')}"
+
+    if tool_name == "get_artifact":
+        art_id = data.get("id", "?")
+        art_type = data.get("type", "?")
+        art_name = data.get("name", "?")
+        return f"Retrieved {art_type} artifact: {art_name} (ID: {art_id})"
 
     # Generic fallback
     return f"{tool_name} result ({len(json.dumps(data))} chars)"

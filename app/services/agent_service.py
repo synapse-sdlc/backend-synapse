@@ -69,25 +69,63 @@ APPROVAL_MESSAGES = {
 }
 
 
-def load_conversation_history(db: Session, feature_id: str) -> list:
-    """Load messages from DB and convert to the format expected by agent_loop."""
-    messages = (
+def load_conversation_history(db: Session, feature_id: str, max_messages: int = 80) -> list:
+    """Load messages from DB with smart truncation.
+
+    Loads the most recent max_messages. If history exceeds this, older messages
+    are summarized into a single context message so the agent retains awareness
+    of what happened without full context bloat.
+    """
+    all_messages = (
         db.query(Message)
         .filter(Message.feature_id == feature_id)
         .order_by(Message.created_at)
         .all()
     )
 
-    history = []
-    for m in messages:
+    # Convert all to agent_loop format
+    full_history = []
+    for m in all_messages:
         entry = {"role": m.role, "content": m.content or ""}
         if m.tool_name:
             entry["tool_name"] = m.tool_name
         if m.tool_calls:
             entry["tool_calls"] = m.tool_calls
-        history.append(entry)
+        full_history.append(entry)
 
-    return history
+    if len(full_history) <= max_messages:
+        return full_history
+
+    # Summarize older messages, keep recent ones in full
+    older = full_history[:-max_messages]
+    recent = full_history[-max_messages:]
+
+    # Build a concise summary of the older conversation
+    summary_parts = []
+    for m in older:
+        if m["role"] == "user":
+            content = (m["content"] or "")[:150]
+            if content:
+                summary_parts.append(f"User: {content}")
+        elif m["role"] == "assistant":
+            content = (m["content"] or "")[:150]
+            if content:
+                summary_parts.append(f"Agent: {content}")
+        elif m["role"] == "tool" and m.get("tool_name") == "store_artifact":
+            try:
+                data = json.loads(m["content"])
+                summary_parts.append(f"Stored artifact: {data.get('artifact_id', '?')}")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    summary_text = (
+        f"[Earlier conversation summary — {len(older)} messages omitted for context budget]\n"
+        + "\n".join(summary_parts[-20:])  # Keep last 20 summary lines
+        if summary_parts else f"[{len(older)} earlier messages omitted]"
+    )
+
+    # Prepend summary as a system-style user message
+    return [{"role": "user", "content": summary_text}] + recent
 
 
 def save_new_messages(db: Session, feature_id: str, old_count: int, messages: list):

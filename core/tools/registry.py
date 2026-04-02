@@ -28,5 +28,5 @@ class ToolRegistry:
         try:
             return await self._tools[name].execute(arguments)
         except Exception as e:
-            print(f"  [tool exception] {name}: {e}")
+            import logging; logging.getLogger("synapse.tools").warning(f"Tool exception {name}: {e}")
             return {"error": f"Tool {name} failed: {e}"}

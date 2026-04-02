@@ -44,6 +44,23 @@ def _verify_project_access(db: Session, project_id: UUID, user: CurrentUser) -> 
     return project
 
 
+def _check_agent_not_running(feature: Feature):
+    """Check if an agent task is already running for this feature. Raises 409 if so."""
+    if feature.agent_task_id:
+        from celery.result import AsyncResult
+        from app.workers.celery_app import celery_app
+        result = AsyncResult(feature.agent_task_id, app=celery_app)
+        if result.state in ("PENDING", "STARTED", "RETRY"):
+            raise HTTPException(status_code=409, detail="Agent is already processing this feature. Please wait.")
+        # Task completed/failed — stale ID, will be overwritten
+
+
+def _record_task_id(db: Session, feature: Feature, task_id: str):
+    """Record Celery task ID on feature for concurrency tracking."""
+    feature.agent_task_id = task_id
+    db.commit()
+
+
 def _try_auto_jira_export(db: Session, feature: Feature):
     """Auto-trigger Jira export if configured. Fails silently — never breaks approval."""
     try:
@@ -86,7 +103,8 @@ def create_feature(
         f'Follow the spec-drafting skill instructions. Start with Phase 1: '
         f'ask 3-5 clarifying questions before generating anything.'
     )
-    agent_run_task.delay(str(feature.id), initial_message)
+    task = agent_run_task.delay(str(feature.id), initial_message)
+    _record_task_id(db, feature, task.id)
 
     return feature
 
@@ -112,6 +130,8 @@ def send_message(
     if feature.phase == "closed":
         raise HTTPException(status_code=400, detail="Feature is closed")
 
+    _check_agent_not_running(feature)
+
     db_msg = Message(
         feature_id=feature_id,
         role="user",
@@ -123,7 +143,8 @@ def send_message(
     db.commit()
 
     from app.workers.tasks import agent_run_task
-    agent_run_task.delay(str(feature_id), body.content)
+    task = agent_run_task.delay(str(feature_id), body.content)
+    _record_task_id(db, feature, task.id)
 
     return {"status": "accepted", "feature_id": str(feature_id)}
 
@@ -179,7 +200,8 @@ def approve_feature(
 
     # Trigger next agent (except when moving to done)
     if next_phase[phase] != "done":
-        approval_agent_task.delay(str(feature_id))
+        task = approval_agent_task.delay(str(feature_id))
+        _record_task_id(db, feature, task.id)
     else:
         # Phase just moved to "done" — auto-export to Jira if configured
         _try_auto_jira_export(db, feature)
@@ -235,7 +257,8 @@ def reject_artifact(
         f"Feedback: {body.reason}\n\n"
         f"Please revise the {artifact_type} based on this feedback."
     )
-    agent_run_task.delay(str(feature_id), revision_prompt)
+    task = agent_run_task.delay(str(feature_id), revision_prompt)
+    _record_task_id(db, feature, task.id)
 
     db.refresh(feature)
     return {"status": "rejected", "phase": feature.phase, "feature_id": str(feature_id)}

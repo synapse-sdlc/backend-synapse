@@ -42,7 +42,8 @@ class StoreArtifactTool:
         art_content = arguments.get("content", "")
         art_status = arguments.get("status", "draft")
         existing_id = arguments.get("artifact_id")
-        print(f"  [store_artifact] type={art_type}, name={art_name}, content_len={len(art_content)}, status={art_status}")
+        import logging
+        logging.getLogger("synapse.tools").info(f"store_artifact type={art_type}, name={art_name}, content_len={len(art_content)}, status={art_status}")
 
         if not art_content or len(art_content.strip()) < 10:
             return {
@@ -90,6 +91,12 @@ class StoreArtifactTool:
                 f"---\n\n```json\n{art_content}\n```\n"
             )
 
+        # Sync to S3 (best-effort — never block the response)
+        try:
+            _upload_to_s3(artifact_id, json_path)
+        except Exception as e:
+            logging.getLogger("synapse.tools").warning(f"S3 artifact upload failed (non-fatal): {e}")
+
         return {
             "artifact_id": artifact_id,
             "path": str(json_path),
@@ -98,6 +105,22 @@ class StoreArtifactTool:
             "status": art_status,
             "message": f"Artifact stored: {art_name} (v{version}, {art_status})",
         }
+
+
+def _upload_to_s3(artifact_id: str, local_path: Path):
+    """Upload artifact JSON to S3 for durability. Fails silently if S3 not configured."""
+    import os, boto3
+    bucket = os.environ.get("S3_BUCKET", "")
+    if not bucket:
+        return  # S3 not configured — skip
+    prefix = os.environ.get("S3_ARTIFACTS_PREFIX", "artifacts")
+    region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+    try:
+        s3 = boto3.client("s3", region_name=region)
+        s3.upload_file(str(local_path), bucket, f"{prefix}/{artifact_id}.json")
+        logging.getLogger("synapse.tools").info(f"Artifact {artifact_id} synced to s3://{bucket}/{prefix}/{artifact_id}.json")
+    except Exception:
+        pass  # S3 not available — local + DB are fine
 
 
 def _to_markdown(artifact: dict) -> str:

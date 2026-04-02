@@ -116,8 +116,10 @@ def analyze_directory(dir_path: str) -> dict:
     path = Path(dir_path).resolve()
     gitignore_patterns = _load_gitignore(path)
 
+    import logging
+    _logger = logging.getLogger("synapse.indexer")
     if gitignore_patterns:
-        print(f"  Loaded {len(gitignore_patterns)} .gitignore patterns")
+        _logger.info(f"Loaded {len(gitignore_patterns)} .gitignore patterns")
 
     all_results = []
     skipped = 0
@@ -129,7 +131,7 @@ def analyze_directory(dir_path: str) -> dict:
             all_results.append(analyze_file(str(f)))
 
     if skipped:
-        print(f"  Skipped {skipped} ignored files")
+        _logger.info(f"Skipped {skipped} ignored files")
 
     return {
         "directory": str(path),

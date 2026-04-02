@@ -1,7 +1,13 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
 
 from app.db import engine, Base
 # Import all models so Base.metadata.create_all() creates their tables

@@ -18,6 +18,7 @@ class FeatureResponse(BaseModel):
     plan_artifact_id: Optional[str]
     tests_artifact_id: Optional[str]
     jira_epic_key: Optional[str] = None
+    agent_task_id: Optional[str] = None
     created_at: datetime
 
     class Config:

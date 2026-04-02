@@ -38,6 +38,12 @@ def _get_sync_session() -> Session:
     return Session(_sync_engine)
 
 
+def _is_retryable(exc: Exception) -> bool:
+    """Check if an exception is transient and worth retrying."""
+    msg = str(exc).lower()
+    return any(k in msg for k in ("timeout", "connection", "429", "503", "throttl", "rate limit"))
+
+
 _redis_pool = None
 
 
@@ -63,11 +69,19 @@ def _publish_feature_event(feature_id: str, event: dict):
     _publish_event(f"feature:{feature_id}", event)
 
 
-@celery_app.task(bind=True, name="app.workers.tasks.agent_run_task", time_limit=600, max_retries=0)
+@celery_app.task(bind=True, name="app.workers.tasks.agent_run_task", time_limit=600, max_retries=1)
 def agent_run_task(self, feature_id: str, user_message: str):
     """Run a single agent turn for a feature conversation."""
     session = _get_sync_session()
+    lock = None
     try:
+        # Redis distributed lock — prevents concurrent agent runs on same feature
+        r = _get_redis()
+        lock = r.lock(f"agent:{feature_id}", timeout=600, blocking_timeout=0)
+        if not lock.acquire(blocking=False):
+            logger.warning(f"Agent lock held for feature {feature_id}, skipping")
+            return {"skipped": True, "reason": "agent_locked"}
+
         from app.models.feature import Feature
         feature = session.get(Feature, feature_id)
         if not feature:
@@ -100,16 +114,37 @@ def agent_run_task(self, feature_id: str, user_message: str):
     except Exception as e:
         logger.exception(f"Agent turn failed for feature {feature_id}")
         _publish_feature_event(feature_id, {"type": "error", "message": str(e)})
+        # Retry once on transient errors
+        if self.request.retries < self.max_retries and _is_retryable(e):
+            raise self.retry(countdown=10, exc=e)
         raise
     finally:
+        # Clear agent_task_id
+        try:
+            from app.models.feature import Feature
+            feature = session.get(Feature, feature_id)
+            if feature and feature.agent_task_id == self.request.id:
+                feature.agent_task_id = None
+                session.commit()
+        except Exception:
+            pass
+        if lock and lock.owned():
+            lock.release()
         session.close()
 
 
-@celery_app.task(bind=True, name="app.workers.tasks.approval_agent_task", time_limit=600, max_retries=0)
+@celery_app.task(bind=True, name="app.workers.tasks.approval_agent_task", time_limit=600, max_retries=1)
 def approval_agent_task(self, feature_id: str):
     """Run the next agent after an approval (plan or QA generation)."""
     session = _get_sync_session()
+    lock = None
     try:
+        r = _get_redis()
+        lock = r.lock(f"agent:{feature_id}", timeout=600, blocking_timeout=0)
+        if not lock.acquire(blocking=False):
+            logger.warning(f"Agent lock held for feature {feature_id}, skipping approval")
+            return {"skipped": True, "reason": "agent_locked"}
+
         from app.models.feature import Feature
         feature = session.get(Feature, feature_id)
         if not feature:
@@ -141,8 +176,20 @@ def approval_agent_task(self, feature_id: str):
     except Exception as e:
         logger.exception(f"Approval agent failed for feature {feature_id}")
         _publish_feature_event(feature_id, {"type": "error", "message": str(e)})
+        if self.request.retries < self.max_retries and _is_retryable(e):
+            raise self.retry(countdown=10, exc=e)
         raise
     finally:
+        try:
+            from app.models.feature import Feature
+            feature = session.get(Feature, feature_id)
+            if feature and feature.agent_task_id == self.request.id:
+                feature.agent_task_id = None
+                session.commit()
+        except Exception:
+            pass
+        if lock and lock.owned():
+            lock.release()
         session.close()
 
 
@@ -948,18 +995,75 @@ def knowledge_query_task(self, project_id: str, question: str, persona: str, que
 
         _publish_event(f"knowledge:{query_id}", {"type": "thinking", "message": "Searching knowledge base..."})
 
+        # --- Tier 1: Vector search for targeted context ---
+        vector_context = ""
+        try:
+            from core.indexer.vector_store import VectorStore
+            store = VectorStore()
+
+            # Search knowledge base (decisions, patterns, lessons)
+            kb_results = store.search_knowledge(project_id, question, n_results=5)
+            if kb_results:
+                vector_context += "\n\n## Relevant Knowledge (vector search)\n"
+                for r in kb_results:
+                    vector_context += f"\n- {r['content'][:500]}\n"
+
+            # Search codebase for implementation details
+            repo_ids = [str(r.id) for r in repos]
+            if repo_ids:
+                code_results = store.search_all_repos(project_id, repo_ids, question, n_results=5)
+                if code_results:
+                    vector_context += "\n\n## Relevant Code (vector search)\n"
+                    for r in code_results:
+                        meta = r.get("metadata", {})
+                        vector_context += f"\n### {meta.get('file', 'unknown')} (lines {meta.get('start_line', '?')}-{meta.get('end_line', '?')})\n```\n{r['content'][:600]}\n```\n"
+        except Exception as e:
+            logger.warning(f"Vector search failed for knowledge query: {e}")
+
+        # --- Tier 2: Direct LLM call (no agent loop, no tools) ---
+        persona_guides = {
+            "po": "Focus on business context, user impact, feature scope. Avoid code details. Use business language.",
+            "qa": "Focus on test coverage, affected areas, regression risk, edge cases. Include which repos/components are impacted.",
+            "developer": "Focus on code patterns, API contracts, implementation details. Include file paths and function signatures.",
+            "tech_lead": "Focus on architecture decisions, trade-offs, risks, and cross-repo dependencies. Include file paths.",
+        }
+        persona_guide = persona_guides.get(persona, persona_guides["developer"])
+
+        system_prompt = f"""You are a Synapse knowledge assistant. Answer the user's question
+based on the provided project context. Be specific and cite sources.
+
+## Persona: {persona}
+{persona_guide}
+
+## Response Format
+1. **Direct answer** to the question
+2. **Details** with supporting evidence (persona-appropriate depth)
+3. **Sources** cited: [file:path:line] or [KB: entry_title] or [Architecture: section]
+4. **Related questions** the user might want to ask next
+
+## Rules
+- Always cite sources — never answer from general knowledge alone
+- If you can't find the answer in the context, say so clearly
+- Keep answers concise: PO answers under 200 words, Dev/TL answers can be longer with code
+
+{codebase_context}
+
+{vector_context}
+"""
+
         provider = get_provider()
-        from core.orchestrator.loop import agent_loop
-        result = asyncio.run(agent_loop(
-            provider=provider,
-            user_message=f"[Persona: {persona}] Question: {question}",
-            skill_name="knowledge-query",
-            codebase_context=codebase_context,
+        result = asyncio.run(provider.chat(
+            system_prompt=system_prompt,
+            messages=[{"role": "user", "content": question}],
+            tools=[],
+            max_tokens=4096,
         ))
+
+        answer = result.get("content", "No answer found.")
 
         _publish_event(f"knowledge:{query_id}", {
             "type": "response",
-            "content": result.get("final_response", "No answer found."),
+            "content": answer,
             "done": True,
         })
 

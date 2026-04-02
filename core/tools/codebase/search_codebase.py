@@ -53,7 +53,7 @@ class SearchCodebaseTool:
                 search_mode = "default collection"
                 results = store.search(query, n_results=n_results)
 
-            print(f"  [search_codebase] mode={search_mode}, query=\"{query[:60]}\", results={len(results)}")
+            import logging; logging.getLogger("synapse.tools").info(f"search_codebase mode={search_mode}, query=\"{query[:60]}\", results={len(results)}")
 
             # Optionally include knowledge base results
             knowledge_results = []

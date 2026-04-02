@@ -50,9 +50,11 @@ class BedrockProvider(LLMProvider):
             "modelId": self.model,
             "system": [{"text": system_prompt}],
             "messages": bedrock_messages,
-            "toolConfig": {"tools": bedrock_tools},
             "inferenceConfig": {"maxTokens": effective_max},
         }
+        # Bedrock rejects empty toolConfig.tools — only include when tools exist
+        if bedrock_tools:
+            request_body["toolConfig"] = {"tools": bedrock_tools}
 
         if self.bearer_token:
             response = await self._call_with_bearer(request_body)
@@ -81,13 +83,15 @@ class BedrockProvider(LLMProvider):
 
     def _call_with_boto3(self, request_body):
         """Standard boto3 call with IAM credentials (SigV4 signing)."""
-        return self.client.converse(
-            modelId=request_body["modelId"],
-            system=request_body["system"],
-            messages=request_body["messages"],
-            toolConfig=request_body["toolConfig"],
-            inferenceConfig=request_body["inferenceConfig"],
-        )
+        kwargs = {
+            "modelId": request_body["modelId"],
+            "system": request_body["system"],
+            "messages": request_body["messages"],
+            "inferenceConfig": request_body["inferenceConfig"],
+        }
+        if "toolConfig" in request_body:
+            kwargs["toolConfig"] = request_body["toolConfig"]
+        return self.client.converse(**kwargs)
 
     async def _call_with_bearer(self, request_body):
         """Direct HTTP call with Bedrock API Key (ABSK prefix).
@@ -102,9 +106,10 @@ class BedrockProvider(LLMProvider):
         body = {
             "system": request_body["system"],
             "messages": request_body["messages"],
-            "toolConfig": request_body["toolConfig"],
             "inferenceConfig": request_body["inferenceConfig"],
         }
+        if "toolConfig" in request_body:
+            body["toolConfig"] = request_body["toolConfig"]
 
         async with httpx.AsyncClient(timeout=300) as client:
             # Try Authorization: Bearer first (standard for ABSK keys)
