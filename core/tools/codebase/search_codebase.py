@@ -17,7 +17,7 @@ class SearchCodebaseTool:
         query = arguments["query"]
         n_results = arguments.get("n_results", 5)
         try:
-            from indexer.vector_store import VectorStore
+            from core.indexer.vector_store import VectorStore
             store = VectorStore()
             results = store.search(query, n_results=n_results)
             return {"query": query, "results": results}

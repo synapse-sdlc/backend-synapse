@@ -34,7 +34,12 @@ class Settings(BaseSettings):
     synapse_provider: str = "ollama"
     synapse_model: str = "qwen3:8b"
     synapse_bedrock_model: str = "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
-    aws_default_region: str = "us-west-2"
+    aws_default_region: str = "us-east-1"
+
+    # AWS credentials (read from .env, passed through to boto3 via env vars)
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_session_token: str = ""
 
     class Config:
         env_file = ".env"

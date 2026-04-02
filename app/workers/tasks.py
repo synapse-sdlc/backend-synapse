@@ -9,6 +9,14 @@ from sqlalchemy.orm import Session
 from app.workers.celery_app import celery_app
 from app.config import settings, get_provider
 
+# Import all models so SQLAlchemy metadata resolves foreign keys
+import app.models.org  # noqa: F401
+import app.models.user  # noqa: F401
+import app.models.project  # noqa: F401
+import app.models.feature  # noqa: F401
+import app.models.artifact  # noqa: F401
+import app.models.message  # noqa: F401
+
 logger = logging.getLogger(__name__)
 
 # Sync engine for Celery tasks (Celery workers are synchronous)
@@ -38,13 +46,20 @@ def _publish_feature_event(feature_id: str, event: dict):
     _publish_event(f"feature:{feature_id}", event)
 
 
-@celery_app.task(bind=True, name="app.workers.tasks.agent_run_task", time_limit=300)
+@celery_app.task(bind=True, name="app.workers.tasks.agent_run_task", time_limit=600, max_retries=0)
 def agent_run_task(self, feature_id: str, user_message: str):
     """Run a single agent turn for a feature conversation."""
-    _publish_feature_event(feature_id, {"type": "thinking", "message": "Agent is processing..."})
-
     session = _get_sync_session()
     try:
+        # Check feature exists before doing any work
+        from app.models.feature import Feature
+        feature = session.get(Feature, feature_id)
+        if not feature:
+            logger.warning(f"Feature {feature_id} not found, skipping stale task")
+            return {"skipped": True, "reason": "feature_not_found"}
+
+        _publish_feature_event(feature_id, {"type": "thinking", "message": "Agent is processing..."})
+
         def on_event(event):
             _publish_feature_event(feature_id, event)
 
@@ -74,13 +89,20 @@ def agent_run_task(self, feature_id: str, user_message: str):
         session.close()
 
 
-@celery_app.task(bind=True, name="app.workers.tasks.approval_agent_task", time_limit=300)
+@celery_app.task(bind=True, name="app.workers.tasks.approval_agent_task", time_limit=600, max_retries=0)
 def approval_agent_task(self, feature_id: str):
     """Run the next agent after an approval (plan or QA generation)."""
-    _publish_feature_event(feature_id, {"type": "thinking", "message": "Generating next artifact..."})
-
     session = _get_sync_session()
     try:
+        # Check feature exists before doing any work
+        from app.models.feature import Feature
+        feature = session.get(Feature, feature_id)
+        if not feature:
+            logger.warning(f"Feature {feature_id} not found, skipping stale approval task")
+            return {"skipped": True, "reason": "feature_not_found"}
+
+        _publish_feature_event(feature_id, {"type": "thinking", "message": "Generating next artifact..."})
+
         def on_event(event):
             _publish_feature_event(feature_id, event)
 

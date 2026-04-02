@@ -1,7 +1,7 @@
 import json
 import re
 import ollama
-from orchestrator.providers.base import LLMProvider
+from core.orchestrator.providers.base import LLMProvider
 
 
 class OllamaProvider(LLMProvider):

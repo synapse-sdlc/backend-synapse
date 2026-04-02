@@ -4,13 +4,13 @@ class ToolRegistry:
         self._register_builtins()
 
     def _register_builtins(self):
-        from tools.codebase.read_file import read_file_tool
-        from tools.codebase.list_directory import list_directory_tool
-        from tools.codebase.search_codebase import search_codebase_tool
-        from tools.codebase.grep_codebase import grep_codebase_tool
-        from tools.codebase.analyze_ast import analyze_ast_tool
-        from tools.artifacts.store_artifact import store_artifact_tool
-        from tools.artifacts.get_artifact import get_artifact_tool
+        from core.tools.codebase.read_file import read_file_tool
+        from core.tools.codebase.list_directory import list_directory_tool
+        from core.tools.codebase.search_codebase import search_codebase_tool
+        from core.tools.codebase.grep_codebase import grep_codebase_tool
+        from core.tools.codebase.analyze_ast import analyze_ast_tool
+        from core.tools.artifacts.store_artifact import store_artifact_tool
+        from core.tools.artifacts.get_artifact import get_artifact_tool
 
         for tool in [
             read_file_tool, list_directory_tool, search_codebase_tool,

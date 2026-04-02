@@ -49,6 +49,30 @@ def list_projects(
     return result.scalars().all()
 
 
+@router.post("/projects/{project_id}/reanalyze", response_model=ProjectResponse)
+def reanalyze_project(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.org_id and project.org_id != user.org_id:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not project.github_url:
+        raise HTTPException(status_code=400, detail="No GitHub URL to analyze")
+
+    project.analysis_status = "pending"
+    db.commit()
+    db.refresh(project)
+
+    from app.workers.tasks import analyze_codebase_task
+    analyze_codebase_task.delay(str(project.id), project.github_url)
+
+    return project
+
+
 @router.get("/projects/{project_id}", response_model=ProjectResponse)
 def get_project(
     project_id: UUID,

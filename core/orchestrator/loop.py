@@ -1,7 +1,7 @@
 import json
-from orchestrator.providers.base import LLMProvider
-from tools.registry import ToolRegistry
-from orchestrator.skill_loader import load_skill
+from core.orchestrator.providers.base import LLMProvider
+from core.tools.registry import ToolRegistry
+from core.orchestrator.skill_loader import load_skill
 
 # Approximate chars per token (conservative estimate)
 CHARS_PER_TOKEN = 4
@@ -95,8 +95,12 @@ generate specs, create technical plans, and produce test cases.
             "tool_calls": response["tool_calls"],
         })
 
-        # If no tool calls — check if the model actually produced output or just stalled
-        if response["stop_reason"] != "tool_use":
+        # If there are tool calls, ALWAYS execute them first — even if stop_reason
+        # is "end_turn". Bedrock sometimes returns both text AND tool_calls together.
+        if response["tool_calls"]:
+            # Execute tools below (fall through to tool execution block)
+            pass
+        elif response["stop_reason"] != "tool_use":
             content = (response["content"] or "").strip()
 
             # In conversational mode, return immediately so the user can respond

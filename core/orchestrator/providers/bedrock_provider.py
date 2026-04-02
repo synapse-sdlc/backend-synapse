@@ -2,13 +2,28 @@ import json
 import uuid
 import boto3
 from botocore.config import Config
-from orchestrator.providers.base import LLMProvider
+from core.orchestrator.providers.base import LLMProvider
 
 
 class BedrockProvider(LLMProvider):
-    def __init__(self, model: str = "us.anthropic.claude-sonnet-4-6"):
+    def __init__(self, model: str = "anthropic.claude-sonnet-4-6", region: str = None):
+        import os
         self.model = model
-        self.client = boto3.client(
+        region = region or os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+
+        # Build explicit credentials from env vars to avoid falling back to ~/.aws/credentials
+        session_kwargs = {"region_name": region}
+        aws_key = os.environ.get("AWS_ACCESS_KEY_ID")
+        aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY")
+        aws_token = os.environ.get("AWS_SESSION_TOKEN")
+        if aws_key and aws_secret:
+            session_kwargs["aws_access_key_id"] = aws_key
+            session_kwargs["aws_secret_access_key"] = aws_secret
+            if aws_token:
+                session_kwargs["aws_session_token"] = aws_token
+
+        session = boto3.Session(**session_kwargs)
+        self.client = session.client(
             "bedrock-runtime",
             config=Config(read_timeout=300, retries={"max_attempts": 3}),
         )
@@ -29,8 +44,8 @@ class BedrockProvider(LLMProvider):
         # Convert messages
         bedrock_messages = self._convert_messages(messages)
 
-        # Cap max_tokens to model limit (8192 for older Sonnet models)
-        effective_max = min(max_tokens, 8192)
+        # Claude Sonnet 4.6 supports up to 64K output tokens
+        effective_max = min(max_tokens, 32768)
 
         response = self.client.converse(
             modelId=self.model,
@@ -61,7 +76,13 @@ class BedrockProvider(LLMProvider):
         }
 
     def _convert_messages(self, messages):
-        """Convert internal message format to Bedrock Converse format."""
+        """Convert internal message format to Bedrock Converse format.
+
+        Bedrock requires every tool_use block to have a matching tool_result
+        in the immediately following user message. If an assistant message has
+        tool_calls but no tool results follow (orphaned from a prior session),
+        we strip the tool_calls to avoid a ValidationException.
+        """
         bedrock_messages = []
 
         i = 0
@@ -76,22 +97,30 @@ class BedrockProvider(LLMProvider):
                 i += 1
 
             elif msg["role"] == "assistant":
+                tool_calls = msg.get("tool_calls", [])
+
+                # Check if tool results actually follow this assistant message
+                has_tool_results = (
+                    i + 1 < len(messages) and messages[i + 1]["role"] == "tool"
+                )
+
                 content = []
                 if msg.get("content"):
                     content.append({"text": msg["content"]})
 
-                # Add toolUse blocks with generated IDs
+                # Only include tool_use blocks if matching tool_results follow
                 tool_ids = []
-                for tc in msg.get("tool_calls", []):
-                    tool_id = tc.get("id") or f"tool_{uuid.uuid4().hex[:12]}"
-                    tool_ids.append(tool_id)
-                    content.append({
-                        "toolUse": {
-                            "toolUseId": tool_id,
-                            "name": tc["name"],
-                            "input": tc["arguments"],
-                        }
-                    })
+                if tool_calls and has_tool_results:
+                    for tc in tool_calls:
+                        tool_id = tc.get("id") or f"tool_{uuid.uuid4().hex[:12]}"
+                        tool_ids.append(tool_id)
+                        content.append({
+                            "toolUse": {
+                                "toolUseId": tool_id,
+                                "name": tc["name"],
+                                "input": tc["arguments"],
+                            }
+                        })
 
                 if not content:
                     content.append({"text": ""})
@@ -122,4 +151,6 @@ class BedrockProvider(LLMProvider):
             else:
                 i += 1
 
+        # Ensure messages alternate user/assistant and don't end with assistant
+        # (Bedrock requires the last message to be from user)
         return bedrock_messages

@@ -4,6 +4,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import engine, Base
+# Import all models so Base.metadata.create_all() creates their tables
+import app.models.org  # noqa: F401
+import app.models.user  # noqa: F401
+import app.models.project  # noqa: F401
+import app.models.feature  # noqa: F401
+import app.models.artifact  # noqa: F401
+import app.models.message  # noqa: F401
+
 from app.api import auth, projects, features, artifacts, stream, health
 
 

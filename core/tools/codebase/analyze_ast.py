@@ -13,7 +13,7 @@ class AnalyzeASTTool:
     }
 
     async def execute(self, arguments: dict) -> dict:
-        from indexer.static_analyzer import analyze_file
+        from core.indexer.static_analyzer import analyze_file
         path = arguments["path"]
         try:
             result = analyze_file(path)
