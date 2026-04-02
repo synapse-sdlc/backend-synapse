@@ -17,6 +17,7 @@ async def agent_loop(
     max_turns: int = 30,
     conversation_history: list = None,
     stop_on_text: bool = False,
+    on_event: callable = None,
 ) -> dict:
     """
     The single agentic loop. This is the entire orchestrator.
@@ -81,6 +82,8 @@ generate specs, create technical plans, and produce test cases.
         tool_names = [tc["name"] for tc in response["tool_calls"]]
         if tool_names:
             print(f"  Turn {turn + 1}: calling {', '.join(tool_names)}")
+            if on_event:
+                on_event({"type": "tool_call", "tools": tool_names, "turn": turn + 1})
         else:
             preview = (response["content"] or "")[:100]
             print(f"  Turn {turn + 1}: finished — {preview}{'...' if len(response['content'] or '') > 100 else ''}")
@@ -143,12 +146,15 @@ generate specs, create technical plans, and produce test cases.
                 artifact_id = save_result.get("artifact_id")
                 print(f"  [auto-saved artifact: {artifact_id}]")
 
-            return {
+            result = {
                 "final_response": final_content or response["content"],
                 "turns": turn + 1,
                 "messages": messages,
                 "artifact_id": artifact_id,
             }
+            if on_event:
+                on_event({"type": "done", "turns": turn + 1, "artifact_id": artifact_id})
+            return result
 
         # Execute each tool call
         for tool_call in response["tool_calls"]:
@@ -162,6 +168,8 @@ generate specs, create technical plans, and produce test cases.
                 print(f"  [tool error] {tool_call['name']}: {e}")
             if "error" in result and tool_call["name"] == "store_artifact":
                 print(f"  [store_artifact error] {result['error']}")
+            if tool_call["name"] == "store_artifact" and "artifact_id" in result and on_event:
+                on_event({"type": "artifact_stored", "artifact_id": result["artifact_id"], "turn": turn + 1})
             messages.append({
                 "role": "tool",
                 "tool_name": tool_call["name"],

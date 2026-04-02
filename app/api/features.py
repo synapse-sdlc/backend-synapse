@@ -19,8 +19,15 @@ def create_feature(project_id: UUID, body: FeatureCreate, db: Session = Depends(
     db.commit()
     db.refresh(feature)
 
-    # TODO: enqueue initial agent turn via Celery
-    # The first message should be the feature description + "ask clarifying questions"
+    # Enqueue initial agent turn: ask clarifying questions
+    from app.workers.tasks import agent_run_task
+    initial_message = (
+        f'A Product Owner wants to draft a feature spec for:\n\n'
+        f'"{body.description}"\n\n'
+        f'Follow the spec-drafting skill instructions. Start with Phase 1: '
+        f'ask 3-5 clarifying questions before generating anything.'
+    )
+    agent_run_task.delay(str(feature.id), initial_message)
 
     return feature
 
@@ -39,8 +46,8 @@ def send_message(feature_id: UUID, body: MessageRequest, db: Session = Depends(g
     if not feature:
         raise HTTPException(status_code=404, detail="Feature not found")
 
-    # TODO: enqueue agent_run_task(feature_id, body.content) via Celery
-    # Return 202 immediately, client listens on SSE for progress
+    from app.workers.tasks import agent_run_task
+    agent_run_task.delay(str(feature_id), body.content)
 
     return {"status": "accepted", "feature_id": str(feature_id)}
 
@@ -54,19 +61,23 @@ def approve_feature(feature_id: UUID, db: Session = Depends(get_db)):
     phase = feature.phase
 
     # Update current artifact status to approved
+    from app.workers.tasks import approval_agent_task
+
     if phase == "spec_review" and feature.spec_artifact_id:
         artifact = db.get(Artifact, feature.spec_artifact_id)
         if artifact:
             artifact.status = "approved"
         feature.phase = "plan_review"
-        # TODO: enqueue generate_plan task via Celery
+        db.commit()
+        approval_agent_task.delay(str(feature_id))
 
     elif phase == "plan_review" and feature.plan_artifact_id:
         artifact = db.get(Artifact, feature.plan_artifact_id)
         if artifact:
             artifact.status = "approved"
         feature.phase = "qa_review"
-        # TODO: enqueue generate_tests task via Celery
+        db.commit()
+        approval_agent_task.delay(str(feature_id))
 
     elif phase == "qa_review" and feature.tests_artifact_id:
         artifact = db.get(Artifact, feature.tests_artifact_id)

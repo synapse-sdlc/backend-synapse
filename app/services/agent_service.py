@@ -1,34 +1,302 @@
 """
 Agent service: bridges the core orchestrator loop with the web backend.
 
-This is the most critical new file. It ports the phase transition logic
-from code-to-arc/repl.py to work with database-backed state instead of
-in-memory ConversationSession.
+Ports the phase transition logic from code-to-arc/repl.py to work with
+database-backed state instead of in-memory ConversationSession.
 """
 
-# TODO: implement the following:
-#
-# PHASE_SKILL_MAP = {
-#     "gathering": "spec-drafting",
-#     "spec_review": "spec-drafting",
-#     "plan_review": "tech-planning",
-#     "qa_review": "qa-testing",
-# }
-#
-# async def run_agent_turn(feature_id, user_message, db):
-#     1. Load feature from DB
-#     2. Load messages from DB, convert to loop format
-#     3. Select skill from PHASE_SKILL_MAP[feature.phase]
-#     4. Create on_event callback that publishes to Redis
-#     5. Run core.orchestrator.loop.agent_loop()
-#     6. Save new messages to DB
-#     7. Check for new artifacts (port _check_for_new_artifacts from repl.py)
-#     8. Update feature phase if artifact detected
-#     9. Publish "done" event
-#
-# async def handle_approve(feature_id, db):
-#     1. Load feature
-#     2. Update current artifact status to "approved"
-#     3. Determine next phase
-#     4. If not done, enqueue next agent task
-#     5. If done, generate Jira preview data
+import json
+import logging
+from typing import Optional
+
+from sqlalchemy.orm import Session
+
+from app.models.feature import Feature
+from app.models.artifact import Artifact
+from app.models.message import Message
+from app.config import get_provider
+
+logger = logging.getLogger(__name__)
+
+PHASE_SKILL_MAP = {
+    "gathering": "spec-drafting",
+    "spec_review": "spec-drafting",
+    "plan_review": "tech-planning",
+    "qa_review": "qa-testing",
+}
+
+CONVERSATIONAL_PHASES = {"gathering", "spec_review", "plan_review", "qa_review"}
+
+# Maps artifact type to the phase it triggers
+ARTIFACT_PHASE_MAP = {
+    "spec": "spec_review",
+    "plan": "plan_review",
+    "tests": "qa_review",
+}
+
+# Maps current phase to the artifact field on Feature
+PHASE_ARTIFACT_FIELD = {
+    "spec_review": "spec_artifact_id",
+    "plan_review": "plan_artifact_id",
+    "qa_review": "tests_artifact_id",
+}
+
+# Maps phase to the next phase after approval
+NEXT_PHASE = {
+    "spec_review": "plan_review",
+    "plan_review": "qa_review",
+    "qa_review": "done",
+}
+
+# Maps phase to the approval message that triggers the next agent
+APPROVAL_MESSAGES = {
+    "spec_review": (
+        "The Product Owner has approved the spec (artifact ID: {artifact_id}). "
+        "Now generate a detailed technical implementation plan. "
+        "Read the approved spec using get_artifact, then follow the tech-planning skill instructions. "
+        "Store the plan using store_artifact with type='plan' and parent_id='{artifact_id}'."
+    ),
+    "plan_review": (
+        "The Tech Lead has approved the technical plan (artifact ID: {artifact_id}). "
+        "The feature spec is artifact ID: {spec_id}. "
+        "Now generate comprehensive QA test cases. "
+        "Read both the spec and plan using get_artifact, then follow the qa-testing skill instructions. "
+        "Store the test cases using store_artifact with type='tests' and parent_id='{artifact_id}'."
+    ),
+}
+
+
+def load_conversation_history(db: Session, feature_id: str) -> list:
+    """Load messages from DB and convert to the format expected by agent_loop."""
+    messages = (
+        db.query(Message)
+        .filter(Message.feature_id == feature_id)
+        .order_by(Message.created_at)
+        .all()
+    )
+
+    history = []
+    for m in messages:
+        entry = {"role": m.role, "content": m.content or ""}
+        if m.tool_name:
+            entry["tool_name"] = m.tool_name
+        if m.tool_calls:
+            entry["tool_calls"] = m.tool_calls
+        history.append(entry)
+
+    return history
+
+
+def save_new_messages(db: Session, feature_id: str, old_count: int, messages: list):
+    """Save only the new messages (those added during the agent turn) to DB."""
+    new_messages = messages[old_count:]
+    for m in new_messages:
+        db_msg = Message(
+            feature_id=feature_id,
+            role=m["role"],
+            content=m.get("content", ""),
+            tool_name=m.get("tool_name"),
+            tool_calls=m.get("tool_calls"),
+        )
+        db.add(db_msg)
+    db.commit()
+
+
+def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Optional[str]:
+    """Check if the agent stored any new artifacts and update feature state.
+
+    Ported from code-to-arc/repl.py _check_for_new_artifacts().
+    Returns the new artifact ID if found, None otherwise.
+    """
+    from pathlib import Path
+
+    for m in reversed(messages):
+        if m.get("role") != "tool" or m.get("tool_name") != "store_artifact":
+            continue
+        try:
+            data = json.loads(m["content"])
+            aid = data.get("artifact_id")
+            if not aid:
+                continue
+
+            # Check what type of artifact was stored by reading from filesystem
+            # (the core tool writes to ./artifacts/)
+            artifact_path = Path("./artifacts") / f"{aid}.json"
+            if not artifact_path.exists():
+                continue
+
+            artifact_data = json.loads(artifact_path.read_text())
+            art_type = artifact_data.get("type")
+
+            # Save artifact to DB
+            content = artifact_data.get("content", "")
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except (json.JSONDecodeError, TypeError):
+                    content = {"raw": content}
+
+            db_artifact = Artifact(
+                id=aid,
+                type=art_type,
+                name=artifact_data.get("name", ""),
+                content=content,
+                parent_id=artifact_data.get("parent_id"),
+                status=artifact_data.get("status", "draft"),
+                version=artifact_data.get("version", 1),
+                feature_id=feature.id,
+            )
+            db.merge(db_artifact)
+
+            # Update feature phase based on artifact type
+            if art_type == "spec" and feature.spec_artifact_id != aid:
+                feature.spec_artifact_id = aid
+                if feature.phase == "gathering":
+                    feature.phase = "spec_review"
+                    logger.info(f"Feature {feature.id}: spec generated, moving to spec_review")
+                db.commit()
+                return aid
+
+            if art_type == "plan" and feature.plan_artifact_id != aid:
+                feature.plan_artifact_id = aid
+                if feature.phase in ("spec_review", "plan_review"):
+                    feature.phase = "plan_review"
+                    logger.info(f"Feature {feature.id}: plan generated, moving to plan_review")
+                db.commit()
+                return aid
+
+            if art_type == "tests" and feature.tests_artifact_id != aid:
+                feature.tests_artifact_id = aid
+                if feature.phase in ("plan_review", "qa_review"):
+                    feature.phase = "qa_review"
+                    logger.info(f"Feature {feature.id}: tests generated, moving to qa_review")
+                db.commit()
+                return aid
+
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning(f"Failed to parse artifact from message: {e}")
+            continue
+
+    return None
+
+
+async def run_agent_turn(
+    feature_id: str,
+    user_message: str,
+    db: Session,
+    on_event: callable = None,
+) -> dict:
+    """Run a single agent turn for a feature conversation.
+
+    This is the core function that bridges the web backend with the orchestrator.
+    """
+    feature = db.get(Feature, feature_id)
+    if not feature:
+        raise ValueError(f"Feature {feature_id} not found")
+
+    # Load conversation history from DB
+    history = load_conversation_history(db, str(feature_id))
+    old_count = len(history)
+
+    # Select skill based on current phase
+    skill = PHASE_SKILL_MAP.get(feature.phase, "spec-drafting")
+    stop_on_text = feature.phase in CONVERSATIONAL_PHASES
+
+    # Get provider (Ollama or Bedrock)
+    provider = get_provider()
+
+    # Load codebase context from project if available
+    from app.models.project import Project
+    project = db.get(Project, feature.project_id)
+    codebase_context = project.codebase_context or "" if project else ""
+
+    # Run the core agent loop
+    from core.orchestrator.loop import agent_loop
+    result = await agent_loop(
+        provider=provider,
+        user_message=user_message,
+        skill_name=skill,
+        codebase_context=codebase_context,
+        conversation_history=history if history else None,
+        stop_on_text=stop_on_text,
+        on_event=on_event,
+    )
+
+    # Save new messages to DB
+    save_new_messages(db, str(feature_id), old_count, result["messages"])
+
+    # Check if agent stored any artifacts, update feature phase
+    new_artifact_id = check_for_new_artifacts(db, feature, result["messages"])
+
+    return {
+        "final_response": result["final_response"],
+        "turns": result["turns"],
+        "artifact_id": new_artifact_id or result.get("artifact_id"),
+        "phase": feature.phase,
+    }
+
+
+async def run_approval_agent(
+    feature_id: str,
+    db: Session,
+    on_event: callable = None,
+) -> dict:
+    """Run the next agent after an approval (plan generation or QA test generation).
+
+    Called when a user approves spec -> triggers plan agent,
+    or approves plan -> triggers QA agent.
+    """
+    feature = db.get(Feature, feature_id)
+    if not feature:
+        raise ValueError(f"Feature {feature_id} not found")
+
+    phase = feature.phase
+
+    # Determine the approval message
+    if phase == "plan_review":
+        # Spec was just approved, generate plan
+        msg = APPROVAL_MESSAGES["spec_review"].format(
+            artifact_id=feature.spec_artifact_id
+        )
+        skill = "tech-planning"
+    elif phase == "qa_review":
+        # Plan was just approved, generate tests
+        msg = APPROVAL_MESSAGES["plan_review"].format(
+            artifact_id=feature.plan_artifact_id,
+            spec_id=feature.spec_artifact_id,
+        )
+        skill = "qa-testing"
+    else:
+        logger.warning(f"No approval agent for phase: {phase}")
+        return {"phase": phase}
+
+    # Load conversation history
+    history = load_conversation_history(db, str(feature_id))
+    old_count = len(history)
+
+    provider = get_provider()
+
+    from app.models.project import Project
+    project = db.get(Project, feature.project_id)
+    codebase_context = project.codebase_context or "" if project else ""
+
+    from core.orchestrator.loop import agent_loop
+    result = await agent_loop(
+        provider=provider,
+        user_message=msg,
+        skill_name=skill,
+        codebase_context=codebase_context,
+        conversation_history=history if history else None,
+        stop_on_text=False,  # Don't stop on text, we want the full artifact
+        on_event=on_event,
+    )
+
+    save_new_messages(db, str(feature_id), old_count, result["messages"])
+    new_artifact_id = check_for_new_artifacts(db, feature, result["messages"])
+
+    return {
+        "final_response": result["final_response"],
+        "turns": result["turns"],
+        "artifact_id": new_artifact_id or result.get("artifact_id"),
+        "phase": feature.phase,
+    }

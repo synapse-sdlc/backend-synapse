@@ -43,16 +43,70 @@ def agent_run_task(self, feature_id: str, user_message: str):
     """Run a single agent turn for a feature conversation."""
     _publish_feature_event(feature_id, {"type": "thinking", "message": "Agent is processing..."})
 
-    # TODO: wire up agent_service.run_agent_turn()
-    # This will:
-    # 1. Load feature + messages from DB via _get_sync_session()
-    # 2. Select skill based on phase
-    # 3. Run agent_loop() with on_event callback that calls _publish_feature_event
-    # 4. Save new messages to DB
-    # 5. Check for new artifacts, update feature phase
-    # 6. Publish "done" event
+    session = _get_sync_session()
+    try:
+        def on_event(event):
+            _publish_feature_event(feature_id, event)
 
-    _publish_feature_event(feature_id, {"type": "done", "message": "Agent turn complete"})
+        from app.services.agent_service import run_agent_turn
+        result = asyncio.run(run_agent_turn(
+            feature_id=feature_id,
+            user_message=user_message,
+            db=session,
+            on_event=on_event,
+        ))
+
+        _publish_feature_event(feature_id, {
+            "type": "response",
+            "content": result["final_response"],
+            "phase": result["phase"],
+            "artifact_id": result.get("artifact_id"),
+        })
+        _publish_feature_event(feature_id, {"type": "done", "phase": result["phase"]})
+
+        return result
+
+    except Exception as e:
+        logger.exception(f"Agent turn failed for feature {feature_id}")
+        _publish_feature_event(feature_id, {"type": "error", "message": str(e)})
+        raise
+    finally:
+        session.close()
+
+
+@celery_app.task(bind=True, name="app.workers.tasks.approval_agent_task", time_limit=300)
+def approval_agent_task(self, feature_id: str):
+    """Run the next agent after an approval (plan or QA generation)."""
+    _publish_feature_event(feature_id, {"type": "thinking", "message": "Generating next artifact..."})
+
+    session = _get_sync_session()
+    try:
+        def on_event(event):
+            _publish_feature_event(feature_id, event)
+
+        from app.services.agent_service import run_approval_agent
+        result = asyncio.run(run_approval_agent(
+            feature_id=feature_id,
+            db=session,
+            on_event=on_event,
+        ))
+
+        _publish_feature_event(feature_id, {
+            "type": "response",
+            "content": result.get("final_response", ""),
+            "phase": result["phase"],
+            "artifact_id": result.get("artifact_id"),
+        })
+        _publish_feature_event(feature_id, {"type": "done", "phase": result["phase"]})
+
+        return result
+
+    except Exception as e:
+        logger.exception(f"Approval agent failed for feature {feature_id}")
+        _publish_feature_event(feature_id, {"type": "error", "message": str(e)})
+        raise
+    finally:
+        session.close()
 
 
 @celery_app.task(bind=True, name="app.workers.tasks.analyze_codebase_task", time_limit=600)
