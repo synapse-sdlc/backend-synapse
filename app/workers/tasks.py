@@ -148,9 +148,15 @@ def analyze_codebase_task(self, project_id: str, github_url: str):
         session.commit()
         _publish_project_event(project_id, {"type": "status", "status": "analyzing"})
 
+        # Decrypt GitHub token if available
+        github_token = None
+        if project.github_token_encrypted:
+            from app.utils.crypto import decrypt_token
+            github_token = decrypt_token(project.github_token_encrypted)
+
         # Step 1: Clone to /tmp, upload to S3
         _publish_project_event(project_id, {"type": "step", "step": "Cloning repository..."})
-        s3_key = clone_repo_to_s3(project_id, github_url)
+        s3_key = clone_repo_to_s3(project_id, github_url, github_token=github_token)
         project.s3_repo_key = s3_key
         session.commit()
 

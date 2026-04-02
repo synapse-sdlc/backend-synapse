@@ -8,6 +8,7 @@ from pydantic import BaseModel
 class ProjectCreate(BaseModel):
     name: str
     github_url: Optional[str] = None
+    github_token: Optional[str] = None  # PAT, encrypted before storage, never returned
 
 
 class ProjectResponse(BaseModel):

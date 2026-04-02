@@ -14,6 +14,12 @@ router = APIRouter()
 @router.post("/projects", response_model=ProjectResponse, status_code=201)
 def create_project(body: ProjectCreate, db: Session = Depends(get_db)):
     project = Project(name=body.name, github_url=body.github_url)
+
+    # Encrypt and store GitHub token if provided
+    if body.github_token:
+        from app.utils.crypto import encrypt_token
+        project.github_token_encrypted = encrypt_token(body.github_token)
+
     db.add(project)
     db.commit()
     db.refresh(project)

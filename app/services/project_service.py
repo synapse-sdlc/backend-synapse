@@ -28,20 +28,28 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-def clone_repo_to_s3(project_id: str, github_url: str) -> str:
+def clone_repo_to_s3(project_id: str, github_url: str, github_token: str = None) -> str:
     """Clone a GitHub repo and upload it to S3 as a tar.gz archive.
 
+    If github_token is provided, it's injected into the URL for private repo access.
     Returns the S3 key for the uploaded archive.
     """
     s3_key = f"{settings.s3_repos_prefix}/{project_id}/repo.tar.gz"
 
     with tempfile.TemporaryDirectory() as tmpdir:
         clone_path = os.path.join(tmpdir, "repo")
-        logger.info(f"Cloning {github_url} to {clone_path}")
+
+        # Build clone URL with token for private repos
+        clone_url = github_url
+        if github_token and "github.com" in github_url:
+            # https://github.com/org/repo -> https://{token}@github.com/org/repo
+            clone_url = github_url.replace("https://", f"https://{github_token}@")
+
+        logger.info(f"Cloning {github_url} to {clone_path}")  # Log original URL, not the one with token
 
         # Clone (shallow for speed)
         result = subprocess.run(
-            ["git", "clone", "--depth", "1", github_url, clone_path],
+            ["git", "clone", "--depth", "1", clone_url, clone_path],
             capture_output=True, text=True, timeout=120,
         )
         if result.returncode != 0:

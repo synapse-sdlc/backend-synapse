@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.feature import Feature
 from app.models.artifact import Artifact
-from app.schemas.feature import FeatureCreate, FeatureResponse, MessageRequest
+from app.models.message import Message
+from app.schemas.feature import FeatureCreate, FeatureResponse, MessageRequest, MessageResponse
 
 router = APIRouter()
 
@@ -92,3 +93,76 @@ def approve_feature(feature_id: UUID, db: Session = Depends(get_db)):
     db.refresh(feature)
 
     return {"status": "approved", "phase": feature.phase, "feature_id": str(feature_id)}
+
+
+@router.get("/projects/{project_id}/features", response_model=list[FeatureResponse])
+def list_features(project_id: UUID, db: Session = Depends(get_db)):
+    result = db.execute(
+        select(Feature).where(Feature.project_id == project_id).order_by(Feature.created_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.get("/features/{feature_id}/messages", response_model=list[MessageResponse])
+def list_messages(feature_id: UUID, db: Session = Depends(get_db)):
+    feature = db.get(Feature, feature_id)
+    if not feature:
+        raise HTTPException(status_code=404, detail="Feature not found")
+    result = db.execute(
+        select(Message)
+        .where(Message.feature_id == feature_id)
+        .where(Message.role.in_(["user", "assistant"]))  # Skip tool messages for chat display
+        .order_by(Message.created_at)
+    )
+    return result.scalars().all()
+
+
+@router.get("/features/{feature_id}/jira-preview")
+def jira_preview(feature_id: UUID, db: Session = Depends(get_db)):
+    """Build Jira ticket preview from spec + plan + tests artifacts."""
+    import json
+
+    feature = db.get(Feature, feature_id)
+    if not feature:
+        raise HTTPException(status_code=404, detail="Feature not found")
+
+    spec_data = {}
+    plan_data = {}
+    tests_data = {}
+
+    if feature.spec_artifact_id:
+        spec_art = db.get(Artifact, feature.spec_artifact_id)
+        if spec_art:
+            spec_data = spec_art.content if isinstance(spec_art.content, dict) else {}
+
+    if feature.plan_artifact_id:
+        plan_art = db.get(Artifact, feature.plan_artifact_id)
+        if plan_art:
+            plan_data = plan_art.content if isinstance(plan_art.content, dict) else {}
+
+    if feature.tests_artifact_id:
+        tests_art = db.get(Artifact, feature.tests_artifact_id)
+        if tests_art:
+            tests_data = tests_art.content if isinstance(tests_art.content, dict) else {}
+
+    # Build preview
+    feature_name = spec_data.get("feature_name") or plan_data.get("feature_name", feature.description)
+    user_stories = spec_data.get("user_stories", [])
+    subtasks = plan_data.get("subtasks", [])
+    test_suites = tests_data.get("test_suites", [])
+
+    total_hours = sum(t.get("estimated_hours", 0) for t in subtasks if isinstance(t, dict))
+    total_tests = sum(len(s.get("test_cases", [])) for s in test_suites if isinstance(s, dict))
+
+    return {
+        "feature_name": feature_name,
+        "priority": spec_data.get("priority", "P1"),
+        "stories": len(user_stories),
+        "tasks": len(subtasks),
+        "test_cases": total_tests,
+        "estimated_human_hours": total_hours,
+        "estimated_ai_hours": round(total_hours * 0.4, 1),
+        "user_stories": user_stories,
+        "subtasks": subtasks,
+        "test_suites": test_suites,
+    }

@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
 
+    # Encryption (for GitHub tokens etc.)
+    # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    encryption_key: str = "default-dev-key-replace-in-production-0000="
+
     # S3
     s3_bucket: str = "synapse-data"
     s3_repos_prefix: str = "repos"

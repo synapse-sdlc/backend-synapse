@@ -17,6 +17,7 @@ class Project(Base):
     analysis_status: Mapped[str] = mapped_column(
         String(20), default="pending"
     )  # pending, analyzing, ready, failed
+    github_token_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Fernet-encrypted PAT
     s3_repo_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # S3 key for cloned repo archive
     codebase_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -25,3 +25,15 @@ class FeatureResponse(BaseModel):
 
 class MessageRequest(BaseModel):
     content: str
+
+
+class MessageResponse(BaseModel):
+    id: UUID
+    feature_id: UUID
+    role: str
+    content: str
+    tool_name: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
