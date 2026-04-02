@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import engine, Base
-from app.api import projects, features, artifacts, stream, health
+from app.api import auth, projects, features, artifacts, stream, health
 
 
 @asynccontextmanager
@@ -25,6 +25,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router, prefix="/api", tags=["health"])
+app.include_router(auth.router, prefix="/api", tags=["auth"])
 app.include_router(projects.router, prefix="/api", tags=["projects"])
 app.include_router(features.router, prefix="/api", tags=["features"])
 app.include_router(artifacts.router, prefix="/api", tags=["artifacts"])

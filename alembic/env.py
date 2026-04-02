@@ -3,6 +3,8 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 
 from app.db import Base
+from app.models.org import Org
+from app.models.user import User
 from app.models.project import Project
 from app.models.feature import Feature
 from app.models.artifact import Artifact
