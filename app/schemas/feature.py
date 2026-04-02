@@ -1,3 +1,5 @@
+from typing import Optional, Any
+
 from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel
@@ -12,9 +14,9 @@ class FeatureResponse(BaseModel):
     project_id: UUID
     description: str
     phase: str
-    spec_artifact_id: str | None
-    plan_artifact_id: str | None
-    tests_artifact_id: str | None
+    spec_artifact_id: Optional[str]
+    plan_artifact_id: Optional[str]
+    tests_artifact_id: Optional[str]
     created_at: datetime
 
     class Config:

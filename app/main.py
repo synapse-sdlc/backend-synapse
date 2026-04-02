@@ -9,10 +9,9 @@ from app.api import projects, features, artifacts, stream, health
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    Base.metadata.create_all(bind=engine)
     yield
-    await engine.dispose()
+    engine.dispose()
 
 
 app = FastAPI(title="Synapse API", version="0.1.0", lifespan=lifespan)

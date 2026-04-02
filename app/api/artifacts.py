@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.artifact import Artifact
@@ -10,17 +10,17 @@ router = APIRouter()
 
 
 @router.get("/artifacts/{artifact_id}", response_model=ArtifactResponse)
-async def get_artifact(artifact_id: str, db: AsyncSession = Depends(get_db)):
-    artifact = await db.get(Artifact, artifact_id)
+def get_artifact(artifact_id: str, db: Session = Depends(get_db)):
+    artifact = db.get(Artifact, artifact_id)
     if not artifact:
         raise HTTPException(status_code=404, detail="Artifact not found")
     return artifact
 
 
 @router.get("/artifacts/{artifact_id}/trace")
-async def get_trace(artifact_id: str, db: AsyncSession = Depends(get_db)):
+def get_trace(artifact_id: str, db: Session = Depends(get_db)):
     """Walk the parent chain and find children to build the traceability graph."""
-    artifact = await db.get(Artifact, artifact_id)
+    artifact = db.get(Artifact, artifact_id)
     if not artifact:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
@@ -37,12 +37,12 @@ async def get_trace(artifact_id: str, db: AsyncSession = Depends(get_db)):
             "parent_id": current.parent_id,
         })
         if current.parent_id:
-            current = await db.get(Artifact, current.parent_id)
+            current = db.get(Artifact, current.parent_id)
         else:
             current = None
 
     # Find children of the original artifact
-    result = await db.execute(
+    result = db.execute(
         select(Artifact).where(Artifact.parent_id == artifact_id)
     )
     children = [

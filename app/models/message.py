@@ -1,3 +1,4 @@
+from typing import Optional
 import uuid
 from datetime import datetime
 from sqlalchemy import String, Text, DateTime, ForeignKey
@@ -14,6 +15,6 @@ class Message(Base):
     feature_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("features.id"), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)  # user, assistant, tool
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    tool_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    tool_calls: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    tool_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    tool_calls: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

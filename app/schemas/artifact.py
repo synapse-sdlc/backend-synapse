@@ -1,6 +1,7 @@
+
 from datetime import datetime
 from uuid import UUID
-from typing import Any
+from typing import Any, Optional
 from pydantic import BaseModel
 
 
@@ -9,12 +10,12 @@ class ArtifactResponse(BaseModel):
     type: str
     name: str
     content: Any
-    content_md: str | None
-    parent_id: str | None
+    content_md: Optional[str]
+    parent_id: Optional[str]
     status: str
     version: int
-    feature_id: UUID | None
-    project_id: UUID | None
+    feature_id: Optional[UUID]
+    project_id: Optional[UUID]
     created_at: datetime
 
     class Config:

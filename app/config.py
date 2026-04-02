@@ -3,8 +3,8 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # Database
-    database_url: str = "postgresql+asyncpg://synapse:synapse@localhost:5432/synapse"
-    database_url_sync: str = "postgresql://synapse:synapse@localhost:5432/synapse"
+    database_url: str = "postgresql+asyncpg://synapse:synapse@localhost:5433/synapse"
+    database_url_sync: str = "postgresql://synapse:synapse@localhost:5433/synapse"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
@@ -12,6 +12,14 @@ class Settings(BaseSettings):
     # Celery
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
+
+    # S3
+    s3_bucket: str = "synapse-data"
+    s3_repos_prefix: str = "repos"
+    s3_artifacts_prefix: str = "artifacts"
+
+    # Local fallback (when S3 is not configured)
+    local_repos_dir: str = "/tmp/synapse/repos"
 
     # LLM Provider
     synapse_provider: str = "ollama"

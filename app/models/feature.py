@@ -1,3 +1,4 @@
+from typing import Optional
 import uuid
 from datetime import datetime
 from sqlalchemy import String, Text, DateTime, ForeignKey
@@ -16,7 +17,7 @@ class Feature(Base):
     phase: Mapped[str] = mapped_column(
         String(20), default="gathering"
     )  # gathering, spec_review, plan_review, qa_review, done
-    spec_artifact_id: Mapped[str | None] = mapped_column(String(12), nullable=True)
-    plan_artifact_id: Mapped[str | None] = mapped_column(String(12), nullable=True)
-    tests_artifact_id: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    spec_artifact_id: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    plan_artifact_id: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    tests_artifact_id: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -2,7 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.feature import Feature
@@ -13,11 +13,11 @@ router = APIRouter()
 
 
 @router.post("/projects/{project_id}/features", response_model=FeatureResponse, status_code=201)
-async def create_feature(project_id: UUID, body: FeatureCreate, db: AsyncSession = Depends(get_db)):
+def create_feature(project_id: UUID, body: FeatureCreate, db: Session = Depends(get_db)):
     feature = Feature(project_id=project_id, description=body.description)
     db.add(feature)
-    await db.commit()
-    await db.refresh(feature)
+    db.commit()
+    db.refresh(feature)
 
     # TODO: enqueue initial agent turn via Celery
     # The first message should be the feature description + "ask clarifying questions"
@@ -26,16 +26,16 @@ async def create_feature(project_id: UUID, body: FeatureCreate, db: AsyncSession
 
 
 @router.get("/features/{feature_id}", response_model=FeatureResponse)
-async def get_feature(feature_id: UUID, db: AsyncSession = Depends(get_db)):
-    feature = await db.get(Feature, feature_id)
+def get_feature(feature_id: UUID, db: Session = Depends(get_db)):
+    feature = db.get(Feature, feature_id)
     if not feature:
         raise HTTPException(status_code=404, detail="Feature not found")
     return feature
 
 
 @router.post("/features/{feature_id}/message", status_code=202)
-async def send_message(feature_id: UUID, body: MessageRequest, db: AsyncSession = Depends(get_db)):
-    feature = await db.get(Feature, feature_id)
+def send_message(feature_id: UUID, body: MessageRequest, db: Session = Depends(get_db)):
+    feature = db.get(Feature, feature_id)
     if not feature:
         raise HTTPException(status_code=404, detail="Feature not found")
 
@@ -46,8 +46,8 @@ async def send_message(feature_id: UUID, body: MessageRequest, db: AsyncSession 
 
 
 @router.post("/features/{feature_id}/approve", status_code=200)
-async def approve_feature(feature_id: UUID, db: AsyncSession = Depends(get_db)):
-    feature = await db.get(Feature, feature_id)
+def approve_feature(feature_id: UUID, db: Session = Depends(get_db)):
+    feature = db.get(Feature, feature_id)
     if not feature:
         raise HTTPException(status_code=404, detail="Feature not found")
 
@@ -55,21 +55,21 @@ async def approve_feature(feature_id: UUID, db: AsyncSession = Depends(get_db)):
 
     # Update current artifact status to approved
     if phase == "spec_review" and feature.spec_artifact_id:
-        artifact = await db.get(Artifact, feature.spec_artifact_id)
+        artifact = db.get(Artifact, feature.spec_artifact_id)
         if artifact:
             artifact.status = "approved"
         feature.phase = "plan_review"
         # TODO: enqueue generate_plan task via Celery
 
     elif phase == "plan_review" and feature.plan_artifact_id:
-        artifact = await db.get(Artifact, feature.plan_artifact_id)
+        artifact = db.get(Artifact, feature.plan_artifact_id)
         if artifact:
             artifact.status = "approved"
         feature.phase = "qa_review"
         # TODO: enqueue generate_tests task via Celery
 
     elif phase == "qa_review" and feature.tests_artifact_id:
-        artifact = await db.get(Artifact, feature.tests_artifact_id)
+        artifact = db.get(Artifact, feature.tests_artifact_id)
         if artifact:
             artifact.status = "approved"
         feature.phase = "done"
@@ -77,7 +77,7 @@ async def approve_feature(feature_id: UUID, db: AsyncSession = Depends(get_db)):
     else:
         raise HTTPException(status_code=400, detail=f"Cannot approve in phase: {phase}")
 
-    await db.commit()
-    await db.refresh(feature)
+    db.commit()
+    db.refresh(feature)
 
     return {"status": "approved", "phase": feature.phase, "feature_id": str(feature_id)}
