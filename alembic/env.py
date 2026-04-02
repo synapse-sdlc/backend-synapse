@@ -3,12 +3,21 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 
 from app.db import Base
-from app.models.org import Org
-from app.models.user import User
-from app.models.project import Project
-from app.models.feature import Feature
-from app.models.artifact import Artifact
-from app.models.message import Message
+
+# Import ALL models so Base.metadata has complete schema
+import app.models.org  # noqa
+import app.models.user  # noqa
+import app.models.project  # noqa
+import app.models.feature  # noqa
+import app.models.artifact  # noqa
+import app.models.message  # noqa
+import app.models.repository  # noqa
+import app.models.jira_config  # noqa
+import app.models.jira_issue_link  # noqa
+import app.models.pr_link  # noqa
+import app.models.knowledge_entry  # noqa
+import app.models.api_contract  # noqa
+import app.models.shared_model  # noqa
 
 config = context.config
 if config.config_file_name is not None:
