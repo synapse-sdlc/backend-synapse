@@ -51,11 +51,15 @@ async def save_jira_config(
         select(JiraConfig).where(JiraConfig.project_id == project_id)
     ).scalars().first()
 
+    import secrets as _secrets
+
     if existing:
         existing.site_url = body.site_url
         existing.user_email = body.user_email
         existing.api_token_encrypted = encrypt_token(body.api_token)
         existing.default_project_key = body.default_project_key
+        if not existing.webhook_secret:
+            existing.webhook_secret = _secrets.token_urlsafe(32)
         db.commit()
         db.refresh(existing)
         return existing
@@ -66,6 +70,7 @@ async def save_jira_config(
             user_email=body.user_email,
             api_token_encrypted=encrypt_token(body.api_token),
             default_project_key=body.default_project_key,
+            webhook_secret=_secrets.token_urlsafe(32),
         )
         db.add(config)
         db.commit()
@@ -85,7 +90,12 @@ def get_jira_config(
     ).scalars().first()
     if not config:
         raise HTTPException(status_code=404, detail="Jira not configured for this project")
-    return config
+    # Build webhook URL from PUBLIC_URL setting
+    from app.config import settings as _s
+    resp = JiraConfigResponse.model_validate(config)
+    if config.webhook_secret:
+        resp.webhook_url = f"{_s.public_url.rstrip('/')}/api/webhooks/jira/{config.webhook_secret}"
+    return resp
 
 
 @router.delete("/projects/{project_id}/jira-config", status_code=204)
@@ -126,6 +136,45 @@ async def test_jira_connection(
         return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Connection failed: {e}")
+
+
+@router.put("/projects/{project_id}/jira-config/jira-secret")
+def save_jira_webhook_secret(
+    project_id: UUID,
+    body: dict,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Save the Jira-provided webhook secret for HMAC signature verification."""
+    _verify_project(db, project_id, user)
+    config = db.execute(
+        select(JiraConfig).where(JiraConfig.project_id == project_id)
+    ).scalars().first()
+    if not config:
+        raise HTTPException(status_code=404, detail="Jira not configured")
+    config.jira_webhook_secret = body.get("jira_webhook_secret", "")
+    db.commit()
+    return {"status": "saved"}
+
+
+@router.post("/projects/{project_id}/jira-config/webhook-secret")
+def regenerate_webhook_secret(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Regenerate the webhook secret (invalidates old webhook URL)."""
+    import secrets as _secrets
+    _verify_project(db, project_id, user)
+    config = db.execute(
+        select(JiraConfig).where(JiraConfig.project_id == project_id)
+    ).scalars().first()
+    if not config:
+        raise HTTPException(status_code=404, detail="Jira not configured")
+    config.webhook_secret = _secrets.token_urlsafe(32)
+    db.commit()
+    db.refresh(config)
+    return {"webhook_secret": config.webhook_secret}
 
 
 # --- Feature-level Jira operations ---

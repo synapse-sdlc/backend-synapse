@@ -17,4 +17,6 @@ class JiraConfig(Base):
     user_email: Mapped[str] = mapped_column(String(255), nullable=False)
     api_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet-encrypted
     default_project_key: Mapped[str] = mapped_column(String(20), nullable=False)  # e.g. "SYN"
+    webhook_secret: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # Our secret in URL path
+    jira_webhook_secret: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Jira's secret for HMAC verification
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

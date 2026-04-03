@@ -205,20 +205,97 @@ class JiraService:
 
     @staticmethod
     def _to_adf(text: str) -> dict:
-        paragraphs = []
-        for line in text.split("\n"):
+        """Convert markdown-like text to Atlassian Document Format (ADF).
+
+        Supports: headings (##), bold (**), bullet lists (- ), code blocks (```), horizontal rules (---).
+        """
+        content = []
+        lines = text.split("\n")
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+
+            # Code block
+            if line.strip().startswith("```"):
+                code_lines = []
+                i += 1
+                while i < len(lines) and not lines[i].strip().startswith("```"):
+                    code_lines.append(lines[i])
+                    i += 1
+                i += 1  # skip closing ```
+                content.append({
+                    "type": "codeBlock",
+                    "attrs": {"language": "text"},
+                    "content": [{"type": "text", "text": "\n".join(code_lines)}],
+                })
+                continue
+
+            # Heading
+            if line.startswith("### "):
+                content.append({
+                    "type": "heading", "attrs": {"level": 3},
+                    "content": [{"type": "text", "text": line[4:].strip()}],
+                })
+                i += 1
+                continue
+            if line.startswith("## "):
+                content.append({
+                    "type": "heading", "attrs": {"level": 2},
+                    "content": [{"type": "text", "text": line[3:].strip()}],
+                })
+                i += 1
+                continue
+
+            # Horizontal rule
+            if line.strip() == "---":
+                content.append({"type": "rule"})
+                i += 1
+                continue
+
+            # Bullet list (collect consecutive - lines)
+            if line.strip().startswith("- "):
+                items = []
+                while i < len(lines) and lines[i].strip().startswith("- "):
+                    item_text = lines[i].strip()[2:]
+                    items.append({
+                        "type": "listItem",
+                        "content": [{"type": "paragraph", "content": JiraService._parse_inline(item_text)}],
+                    })
+                    i += 1
+                content.append({"type": "bulletList", "content": items})
+                continue
+
+            # Regular paragraph
             if line.strip():
-                paragraphs.append({
+                content.append({
                     "type": "paragraph",
-                    "content": [{"type": "text", "text": line}],
+                    "content": JiraService._parse_inline(line),
                 })
             else:
-                paragraphs.append({"type": "paragraph", "content": []})
+                content.append({"type": "paragraph", "content": []})
+            i += 1
 
         return {
             "type": "doc",
             "version": 1,
-            "content": paragraphs if paragraphs else [
+            "content": content if content else [
                 {"type": "paragraph", "content": [{"type": "text", "text": text or ""}]}
             ],
         }
+
+    @staticmethod
+    def _parse_inline(text: str) -> list:
+        """Parse inline bold (**text**) and code (`text`) into ADF marks."""
+        import re
+        parts = []
+        remaining = text
+        for segment in re.split(r'(\*\*[^*]+\*\*|`[^`]+`)', remaining):
+            if not segment:
+                continue
+            if segment.startswith("**") and segment.endswith("**"):
+                parts.append({"type": "text", "text": segment[2:-2], "marks": [{"type": "strong"}]})
+            elif segment.startswith("`") and segment.endswith("`"):
+                parts.append({"type": "text", "text": segment[1:-1], "marks": [{"type": "code"}]})
+            else:
+                parts.append({"type": "text", "text": segment})
+        return parts if parts else [{"type": "text", "text": text}]

@@ -17,6 +17,9 @@ class JiraConfigResponse(BaseModel):
     site_url: str
     user_email: str
     default_project_key: str
+    webhook_secret: Optional[str] = None
+    jira_webhook_secret: Optional[str] = None
+    webhook_url: Optional[str] = None
     created_at: datetime
 
     class Config:

@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # Local fallback (when S3 is not configured)
     local_repos_dir: str = "/tmp/synapse/repos"
 
+    # Public URL (for webhook URLs — set to ngrok/production URL)
+    public_url: str = "http://localhost:8000"
+
     # CORS
     cors_allowed_origins: str = "http://localhost:5173,http://localhost:3000"
 
