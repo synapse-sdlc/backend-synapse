@@ -246,6 +246,69 @@ def approval_agent_task(self, feature_id: str):
         session.close()
 
 
+@celery_app.task(bind=True, name="app.workers.tasks.scaffold_generation_task", time_limit=600, max_retries=1)
+def scaffold_generation_task(self, feature_id: str):
+    """Generate code scaffolds from approved plan + spec + tests."""
+    session = _get_sync_session()
+    lock = None
+    try:
+        r = _get_redis()
+        lock = r.lock(f"agent:{feature_id}", timeout=600, blocking_timeout=0)
+        if not lock.acquire(blocking=False):
+            logger.warning(f"Agent lock held for feature {feature_id}, skipping scaffold")
+            return {"skipped": True, "reason": "agent_locked"}
+
+        from app.models.feature import Feature
+        feature = session.get(Feature, feature_id)
+        if not feature:
+            return {"skipped": True, "reason": "feature_not_found"}
+
+        _publish_feature_event(feature_id, {"type": "thinking", "message": "Generating code scaffolds..."})
+
+        def on_event(event):
+            _publish_feature_event(feature_id, event)
+
+        task_start = time.monotonic()
+
+        from app.services.agent_service import run_scaffold_agent
+        result = asyncio.run(run_scaffold_agent(
+            feature_id=feature_id,
+            db=session,
+            on_event=on_event,
+        ))
+
+        _update_feature_metrics(session, feature_id, result, task_start)
+
+        _publish_feature_event(feature_id, {
+            "type": "response",
+            "content": result.get("final_response", ""),
+            "phase": result["phase"],
+            "artifact_id": result.get("artifact_id"),
+        })
+        _publish_feature_event(feature_id, {"type": "done", "phase": result["phase"]})
+
+        return result
+
+    except Exception as e:
+        logger.exception(f"Scaffold generation failed for feature {feature_id}")
+        _publish_feature_event(feature_id, {"type": "error", "message": str(e)})
+        if self.request.retries < self.max_retries and _is_retryable(e):
+            raise self.retry(countdown=10, exc=e)
+        raise
+    finally:
+        try:
+            from app.models.feature import Feature
+            feature = session.get(Feature, feature_id)
+            if feature and feature.agent_task_id == self.request.id:
+                feature.agent_task_id = None
+                session.commit()
+        except Exception as e:
+            logger.warning(f"Cleanup failed: {e}")
+        if lock and lock.owned():
+            lock.release()
+        session.close()
+
+
 @celery_app.task(bind=True, name="app.workers.tasks.analyze_repository_task", time_limit=600)
 def analyze_repository_task(self, repository_id: str):
     """Per-repository codebase analysis pipeline.

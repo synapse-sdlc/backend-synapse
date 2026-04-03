@@ -259,6 +259,12 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
                 db.commit()
                 return aid
 
+            if art_type == "scaffold":
+                feature.scaffold_artifact_id = aid
+                logger.info(f"Feature {feature.id}: scaffold generated")
+                db.commit()
+                return aid
+
         except (json.JSONDecodeError, TypeError) as e:
             logger.warning(f"Failed to parse artifact from message: {e}")
             continue
@@ -395,6 +401,67 @@ async def run_approval_agent(
 
     save_new_messages(db, str(feature_id), old_count, result["messages"])
     new_artifact_id = check_for_new_artifacts(db, feature, result["messages"])
+
+    return {
+        "final_response": result["final_response"],
+        "turns": result["turns"],
+        "artifact_id": new_artifact_id or result.get("artifact_id"),
+        "phase": feature.phase,
+    }
+
+
+async def run_scaffold_agent(
+    feature_id: str,
+    db: Session,
+    on_event: callable = None,
+) -> dict:
+    """Generate code scaffolds from the approved plan, spec, and tests."""
+    feature = db.get(Feature, feature_id)
+    if not feature:
+        raise ValueError(f"Feature {feature_id} not found")
+
+    if not feature.plan_artifact_id:
+        raise ValueError("Plan artifact required for scaffold generation")
+
+    # Build the instruction message
+    parts = [f"Generate code scaffolds for this feature."]
+    parts.append(f"Plan artifact ID: {feature.plan_artifact_id}")
+    if feature.spec_artifact_id:
+        parts.append(f"Spec artifact ID: {feature.spec_artifact_id}")
+    if feature.tests_artifact_id:
+        parts.append(f"Tests artifact ID: {feature.tests_artifact_id}")
+    parts.append(f"Read all artifacts using get_artifact, then follow the code-scaffold skill instructions.")
+    parts.append(f"Store the scaffold using store_artifact with type='scaffold' and parent_id='{feature.plan_artifact_id}'.")
+    msg = "\n".join(parts)
+
+    history = load_conversation_history(db, str(feature_id))
+    old_count = len(history)
+
+    provider = get_provider()
+    codebase_context = build_agent_context(db, feature)
+
+    project = db.get(Project, feature.project_id)
+    project_custom_skills = (project.custom_skills or {}) if project else {}
+
+    from core.orchestrator.loop import agent_loop
+    result = await agent_loop(
+        provider=provider,
+        user_message=msg,
+        skill_name="code-scaffold",
+        codebase_context=codebase_context,
+        conversation_history=history if history else None,
+        stop_on_text=False,
+        on_event=on_event,
+        custom_skills=project_custom_skills,
+    )
+
+    save_new_messages(db, str(feature_id), old_count, result["messages"])
+    new_artifact_id = check_for_new_artifacts(db, feature, result["messages"])
+
+    # Link scaffold artifact to feature
+    if new_artifact_id:
+        feature.scaffold_artifact_id = new_artifact_id
+        db.commit()
 
     return {
         "final_response": result["final_response"],

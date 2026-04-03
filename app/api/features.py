@@ -492,3 +492,28 @@ def get_traceability_report(
     )
     report["status"] = "complete"
     return report
+
+
+@router.post("/features/{feature_id}/generate-scaffold", status_code=202)
+def generate_scaffold(
+    feature_id: UUID,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Generate code scaffold files from the approved plan."""
+    feature = _verify_feature_access(db, feature_id, user)
+
+    if not feature.plan_artifact_id:
+        raise HTTPException(status_code=400, detail="Plan artifact required — approve the spec first")
+
+    # Check no agent is running
+    if feature.agent_task_id:
+        raise HTTPException(status_code=409, detail="Agent is already running for this feature")
+
+    from app.workers.tasks import scaffold_generation_task
+    task = scaffold_generation_task.delay(str(feature_id))
+
+    feature.agent_task_id = task.id
+    db.commit()
+
+    return {"status": "accepted", "task_id": task.id}

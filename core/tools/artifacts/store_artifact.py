@@ -11,6 +11,7 @@ TYPE_LABELS = {
     "spec": "Feature Specification",
     "plan": "Technical Plan",
     "tests": "Test Cases",
+    "scaffold": "Code Scaffold",
     "kb": "Knowledge Base",
 }
 
@@ -24,7 +25,7 @@ class StoreArtifactTool:
             "type": "object",
             "required": ["type", "name", "content"],
             "properties": {
-                "type": {"type": "string", "enum": ["spec", "plan", "architecture", "tests", "kb"], "description": "Artifact type"},
+                "type": {"type": "string", "enum": ["spec", "plan", "architecture", "tests", "scaffold", "kb"], "description": "Artifact type"},
                 "name": {"type": "string", "description": "Human-readable name (e.g., 'OAuth SSO Feature Spec')"},
                 "content": {"type": "string", "description": "The full artifact content as JSON string"},
                 "parent_id": {"type": "string", "description": "ID of parent artifact for traceability linking"},

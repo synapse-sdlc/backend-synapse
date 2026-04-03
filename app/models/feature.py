@@ -20,6 +20,7 @@ class Feature(Base):
     spec_artifact_id: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
     plan_artifact_id: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
     tests_artifact_id: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    scaffold_artifact_id: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
     jira_epic_key: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     agent_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # Celery task ID for concurrency guard
     total_turns: Mapped[int] = mapped_column(Integer, default=0)

@@ -93,12 +93,33 @@ class TestsSchema(BaseModel):
     coverage_summary: Optional[Dict[str, Any]] = None
 
 
+# ── Scaffold Schema ──────────────────────────────────────────────────
+
+class ScaffoldFile(BaseModel):
+    path: str = ""
+    language: str = ""
+    subtask_id: str = ""
+    story_id: str = ""
+    description: str = ""
+    functions: List[str] = []
+    content: str = ""
+
+
+class ScaffoldSchema(BaseModel):
+    feature_name: str = ""
+    plan_id: str = ""
+    spec_id: str = ""
+    scaffold_files: List[ScaffoldFile] = []
+    summary: Optional[Dict[str, Any]] = None
+
+
 # ── Schema Map ───────────────────────────────────────────────────────
 
 SCHEMA_MAP = {
     "spec": SpecSchema,
     "plan": PlanSchema,
     "tests": TestsSchema,
+    "scaffold": ScaffoldSchema,
 }
 
 
@@ -138,6 +159,17 @@ def compute_confidence(artifact_type: str, content: dict) -> int:
         score += min(30, len(suite_types) * 10)  # Diversity of test types
         score += 15 if content.get("coverage_summary") else 0
         score += 15 if total_cases >= 10 else 0
+
+    elif artifact_type == "scaffold":
+        files = content.get("scaffold_files", [])
+        score += min(30, len(files) * 5)  # Up to 30 for file count
+        total_funcs = sum(len(f.get("functions", [])) for f in files)
+        score += min(20, total_funcs * 2)  # Up to 20 for functions
+        test_files = [f for f in files if "test" in f.get("path", "").lower()]
+        score += 15 if test_files else 0  # Has test skeletons
+        score += 10 if all(f.get("subtask_id") for f in files) else 0  # All linked to subtasks
+        score += 10 if all(f.get("content") for f in files) else 0  # All have content
+        score += 15 if content.get("summary") else 0
 
     return min(100, score)
 

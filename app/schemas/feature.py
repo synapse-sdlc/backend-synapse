@@ -17,6 +17,7 @@ class FeatureResponse(BaseModel):
     spec_artifact_id: Optional[str]
     plan_artifact_id: Optional[str]
     tests_artifact_id: Optional[str]
+    scaffold_artifact_id: Optional[str] = None
     jira_epic_key: Optional[str] = None
     agent_task_id: Optional[str] = None
     total_turns: int = 0
