@@ -7,5 +7,5 @@ venv/
 dist/
 build/
 chroma_db/
-artifacts/
+/artifacts/
 .pytest_cache/
