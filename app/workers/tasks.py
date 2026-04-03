@@ -35,7 +35,8 @@ def _get_sync_session() -> Session:
     global _sync_engine
     if _sync_engine is None:
         sync_url = settings.database_url.replace("+asyncpg", "")
-        _sync_engine = create_engine(sync_url, connect_args={"sslmode": "require"})
+        ssl_mode = "disable" if "localhost" in sync_url else "require"
+        _sync_engine = create_engine(sync_url, connect_args={"sslmode": ssl_mode})
     return Session(_sync_engine)
 
 
