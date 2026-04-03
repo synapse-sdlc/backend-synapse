@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # Local fallback (when S3 is not configured)
     local_repos_dir: str = "/tmp/synapse/repos"
 
+    # CORS
+    cors_allowed_origins: str = "http://localhost:5173,http://localhost:3000"
+
     # LLM Provider
     synapse_provider: str = "ollama"
     synapse_model: str = "qwen3:8b"
