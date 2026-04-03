@@ -42,3 +42,4 @@ jobs:
       - name: Force new ECS deployment
         run: |
           aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --force-new-deployment
+          aws ecs update-service --cluster $ECS_CLUSTER --service process-queue-task --force-new-deployment

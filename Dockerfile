@@ -10,6 +10,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+RUN chmod +x launch.sh launch_celery.sh
+
 ENV PYTHONPATH=/app
 
 EXPOSE 8000
