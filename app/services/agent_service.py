@@ -178,6 +178,30 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
                 except (json.JSONDecodeError, TypeError):
                     content = {"raw": content}
 
+            new_version = artifact_data.get("version", 1)
+
+            # If this is an in-place update (same ID, bumped version), snapshot the old version first
+            existing = db.get(Artifact, aid)
+            prev_id = None
+            if existing and new_version > 1 and existing.version < new_version:
+                import hashlib as _hl
+                from datetime import datetime as _dt
+                snapshot_id = _hl.sha256(f"{aid}:v{existing.version}:{_dt.now().isoformat()}".encode()).hexdigest()[:12]
+                snapshot = Artifact(
+                    id=snapshot_id,
+                    type=existing.type,
+                    name=existing.name,
+                    content=existing.content,
+                    parent_id=existing.parent_id,
+                    status="superseded",
+                    version=existing.version,
+                    feature_id=existing.feature_id,
+                    project_id=existing.project_id,
+                    confidence_score=existing.confidence_score,
+                )
+                db.add(snapshot)
+                prev_id = snapshot_id
+
             db_artifact = Artifact(
                 id=aid,
                 type=art_type,
@@ -185,10 +209,11 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
                 content=content,
                 parent_id=artifact_data.get("parent_id"),
                 status=artifact_data.get("status", "draft"),
-                version=artifact_data.get("version", 1),
+                version=new_version,
                 feature_id=feature.id,
                 project_id=feature.project_id,
                 confidence_score=artifact_data.get("confidence_score"),
+                previous_version_id=prev_id,
             )
             db.merge(db_artifact)
 
