@@ -86,3 +86,45 @@ def get_trace(
     ]
 
     return {"chain": chain, "children": children}
+
+
+@router.get("/artifacts/{artifact_id}/diff")
+def get_artifact_diff(
+    artifact_id: str,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Get diff between current artifact and its previous version."""
+    current = db.get(Artifact, artifact_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    # Org isolation
+    if current.project_id:
+        from app.models.project import Project
+        project = db.get(Project, current.project_id)
+        if project and project.org_id and project.org_id != user.org_id:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+
+    if not current.previous_version_id:
+        return {"has_diff": False}
+
+    previous = db.get(Artifact, current.previous_version_id)
+    if not previous:
+        return {"has_diff": False}
+
+    return {
+        "has_diff": True,
+        "current": {
+            "id": current.id,
+            "version": current.version,
+            "content": current.content,
+            "name": current.name,
+        },
+        "previous": {
+            "id": previous.id,
+            "version": previous.version,
+            "content": previous.content,
+            "name": previous.name,
+        },
+    }

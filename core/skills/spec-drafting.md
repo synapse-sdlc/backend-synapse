@@ -94,6 +94,72 @@ Call `store_artifact` with type="spec" and content as JSON:
 }
 ```
 
+## Example Output
+
+Here is an example of a high-quality spec artifact for reference:
+
+```json
+{
+  "feature_name": "Password Reset via Email",
+  "business_context": "Users who forget their password currently have no self-service recovery option, leading to 40+ support tickets per week.",
+  "personas": [
+    { "name": "End User", "description": "Registered user who forgot their password" },
+    { "name": "Security Admin", "description": "Monitors failed reset attempts for abuse" }
+  ],
+  "priority": "P1",
+  "user_stories": [
+    {
+      "id": "US-001",
+      "role": "End User",
+      "action": "request a password reset link via email",
+      "benefit": "I can regain access to my account without contacting support",
+      "acceptance_criteria": [
+        { "given": "I am on the login page", "when": "I click 'Forgot Password' and enter my email", "then": "I receive a reset link within 60 seconds" },
+        { "given": "I have a reset link", "when": "I click it within 1 hour", "then": "I am taken to a 'Set New Password' form" },
+        { "given": "I enter a valid new password", "when": "I submit the form", "then": "my password is updated and I am logged in automatically" }
+      ]
+    },
+    {
+      "id": "US-002",
+      "role": "Security Admin",
+      "action": "view password reset activity logs",
+      "benefit": "I can detect and respond to potential account takeover attempts",
+      "acceptance_criteria": [
+        { "given": "I am on the admin dashboard", "when": "I navigate to Security > Reset Logs", "then": "I see a list of all reset requests with timestamps, email, IP, and status" }
+      ]
+    }
+  ],
+  "non_functional_requirements": [
+    "Reset tokens expire after 1 hour",
+    "Rate limit: max 5 reset requests per email per hour",
+    "Reset link must use HTTPS with cryptographically random token (min 32 bytes)"
+  ],
+  "edge_cases": [
+    "User requests reset for non-existent email — show same success message (prevent enumeration)",
+    "User clicks expired reset link — show clear error with option to request new link",
+    "User requests multiple resets — only the latest token should be valid"
+  ],
+  "out_of_scope": [
+    "SMS-based password reset (future iteration)",
+    "Admin-initiated password reset"
+  ],
+  "dependencies": [
+    "Email service (SendGrid) must be configured",
+    "Users table must have email column indexed"
+  ],
+  "success_metrics": [
+    "90% of reset flows completed within 2 minutes",
+    "Support tickets for password issues reduced by 80%"
+  ],
+  "impact_analysis": {
+    "affected_components": ["auth-service", "email-service", "users-db"],
+    "affected_routes": ["/api/auth/forgot-password", "/api/auth/reset-password"],
+    "risk_areas": ["Token security", "Email deliverability", "Rate limiting"]
+  },
+  "open_questions": []
+}
+```
+
 ## Phase 3: Refinement
 
 When the user requests changes to the spec:

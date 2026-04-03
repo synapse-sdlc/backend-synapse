@@ -121,6 +121,7 @@ async def query_knowledge(
 
     # --- Tier 1d: Vector search (dev/TL get code, PO/QA get knowledge) ---
     vector_context = ""
+    source_list = []  # Track sources for the response
     try:
         from core.indexer.vector_store import VectorStore
         store = VectorStore()
@@ -131,6 +132,7 @@ async def query_knowledge(
             vector_context += "\n## Relevant Knowledge (semantic search)\n"
             for r in kb_results:
                 vector_context += f"\n- {r['content'][:500]}\n"
+                source_list.append({"type": "knowledge", "content": r["content"][:100]})
 
         # Dev/TL only: search codebase for actual code
         if is_code_persona:
@@ -141,7 +143,9 @@ async def query_knowledge(
                     vector_context += "\n## Relevant Code\n"
                     for r in code_results:
                         meta = r.get("metadata", {})
-                        vector_context += f"\n### {meta.get('file', '?')} (lines {meta.get('line_start', '?')}-{meta.get('line_end', '?')})\n```\n{r['content'][:800]}\n```\n"
+                        file_path = meta.get("file", "?")
+                        vector_context += f"\n### {file_path} (lines {meta.get('line_start', '?')}-{meta.get('line_end', '?')})\n```\n{r['content'][:800]}\n```\n"
+                        source_list.append({"type": "code", "file": file_path, "lines": f"{meta.get('line_start', '?')}-{meta.get('line_end', '?')}"})
     except Exception as e:
         log.warning(f"Vector search failed: {e}")
 
@@ -206,10 +210,15 @@ Answer the user's question based ONLY on the provided context below.
             max_tokens=4096,
         )
         answer = result.get("content", "").strip()
+        # Compute confidence from answer quality + source coverage
+        has_citations = any(c in answer for c in ["[", "file:", "KB:", "US-", "TC-"])
+        has_code = "```" in answer or "`" in answer
+        confidence = "high" if (len(answer) > 100 and len(source_list) >= 2 and (has_citations or has_code)) else \
+                     "medium" if len(answer) > 50 and len(source_list) >= 1 else "low"
         return {
             "answer": answer or "No answer found.",
-            "confidence": "high" if len(answer) > 100 else "medium",
-            "sources": [],
+            "confidence": confidence,
+            "sources": source_list[:10],
             "follow_up_questions": [],
         }
     except Exception as e:

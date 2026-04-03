@@ -50,6 +50,21 @@ class StoreArtifactTool:
                 "error": "Content is empty or too short. You must provide the full artifact content as a JSON string in the 'content' parameter. If the content is large, produce a more concise version but never send empty content."
             }
 
+        # Validate content against schema and compute confidence score
+        confidence_score = None
+        try:
+            from core.schemas.artifact_schemas import validate_artifact
+            parsed_for_validation = json.loads(art_content) if isinstance(art_content, str) else art_content
+            validation = validate_artifact(art_type, parsed_for_validation)
+            confidence_score = validation.get("confidence_score")
+            if validation["errors"]:
+                return {
+                    "error": f"Artifact validation failed: {validation['errors'][0]}",
+                    "hint": "Check the Output Schema in your skill instructions and fix the missing/invalid fields, then call store_artifact again."
+                }
+        except json.JSONDecodeError:
+            pass  # Content is not JSON — skip validation (e.g. raw markdown)
+
         # If updating an existing artifact, load it and increment version
         version = 1
         if existing_id:
@@ -74,6 +89,7 @@ class StoreArtifactTool:
             "status": art_status,
             "created_at": datetime.now().isoformat(),
             "version": version,
+            "confidence_score": confidence_score,
         }
 
         # Save JSON (always succeeds)
@@ -92,8 +108,10 @@ class StoreArtifactTool:
             )
 
         # Sync to S3 (best-effort — never block the response)
+        s3_synced = False
         try:
             _upload_to_s3(artifact_id, json_path)
+            s3_synced = True
         except Exception as e:
             logging.getLogger("synapse.tools").warning(f"S3 artifact upload failed (non-fatal): {e}")
 
@@ -103,7 +121,9 @@ class StoreArtifactTool:
             "markdown_path": str(md_path),
             "version": version,
             "status": art_status,
-            "message": f"Artifact stored: {art_name} (v{version}, {art_status})",
+            "confidence_score": confidence_score,
+            "s3_synced": s3_synced,
+            "message": f"Artifact stored: {art_name} (v{version}, {art_status})" + (f" [confidence: {confidence_score}/100]" if confidence_score is not None else ""),
         }
 
 
@@ -119,8 +139,8 @@ def _upload_to_s3(artifact_id: str, local_path: Path):
         s3 = boto3.client("s3", region_name=region)
         s3.upload_file(str(local_path), bucket, f"{prefix}/{artifact_id}.json")
         logging.getLogger("synapse.tools").info(f"Artifact {artifact_id} synced to s3://{bucket}/{prefix}/{artifact_id}.json")
-    except Exception:
-        pass  # S3 not available — local + DB are fine
+    except Exception as e:
+        logging.getLogger("synapse.tools").warning(f"S3 upload failed for {artifact_id}: {e}")
 
 
 def _to_markdown(artifact: dict) -> str:

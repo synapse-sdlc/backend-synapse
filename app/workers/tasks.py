@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 
 import redis
 from sqlalchemy import create_engine, select
@@ -69,6 +70,46 @@ def _publish_feature_event(feature_id: str, event: dict):
     _publish_event(f"feature:{feature_id}", event)
 
 
+def _estimate_hours_saved(artifact_type, content):
+    """Conservative estimate of manual hours this artifact would take."""
+    if not isinstance(content, dict):
+        return 0.5
+    if artifact_type == "spec":
+        stories = len(content.get("user_stories", []))
+        return 1.0 + stories * 0.5
+    elif artifact_type == "plan":
+        subtasks = len(content.get("subtasks", []))
+        return 2.0 + subtasks * 0.3
+    elif artifact_type == "tests":
+        cases = sum(len(s.get("test_cases", [])) for s in content.get("test_suites", []))
+        return 1.5 + cases * 0.15
+    return 0.5
+
+
+def _update_feature_metrics(session, feature_id, result, task_start):
+    """Update cost/time tracking metrics on a feature after an agent run."""
+    try:
+        from app.models.feature import Feature
+        from app.models.artifact import Artifact
+        feature = session.get(Feature, feature_id)
+        if not feature:
+            return
+        duration_ms = int((time.monotonic() - task_start) * 1000)
+        feature.total_turns = (feature.total_turns or 0) + result.get("turns", 0)
+        feature.total_duration_ms = (feature.total_duration_ms or 0) + duration_ms
+
+        # Estimate hours saved based on artifact
+        artifact_id = result.get("artifact_id")
+        if artifact_id:
+            artifact = session.get(Artifact, artifact_id)
+            if artifact and artifact.content:
+                feature.estimated_hours_saved = (feature.estimated_hours_saved or 0.0) + _estimate_hours_saved(artifact.type, artifact.content)
+        session.commit()
+        logger.info(f"Feature {feature_id} metrics: +{result.get('turns', 0)} turns, +{duration_ms}ms, total_hours_saved={feature.estimated_hours_saved:.1f}")
+    except Exception as e:
+        logger.warning(f"Failed to update feature metrics: {e}")
+
+
 @celery_app.task(bind=True, name="app.workers.tasks.agent_run_task", time_limit=600, max_retries=1)
 def agent_run_task(self, feature_id: str, user_message: str):
     """Run a single agent turn for a feature conversation."""
@@ -93,6 +134,8 @@ def agent_run_task(self, feature_id: str, user_message: str):
         def on_event(event):
             _publish_feature_event(feature_id, event)
 
+        task_start = time.monotonic()
+
         from app.services.agent_service import run_agent_turn
         result = asyncio.run(run_agent_turn(
             feature_id=feature_id,
@@ -100,6 +143,9 @@ def agent_run_task(self, feature_id: str, user_message: str):
             db=session,
             on_event=on_event,
         ))
+
+        # Track cost/time metrics on feature
+        _update_feature_metrics(session, feature_id, result, task_start)
 
         _publish_feature_event(feature_id, {
             "type": "response",
@@ -126,8 +172,8 @@ def agent_run_task(self, feature_id: str, user_message: str):
             if feature and feature.agent_task_id == self.request.id:
                 feature.agent_task_id = None
                 session.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Cleanup failed: {e}")
         if lock and lock.owned():
             lock.release()
         session.close()
@@ -156,12 +202,17 @@ def approval_agent_task(self, feature_id: str):
         def on_event(event):
             _publish_feature_event(feature_id, event)
 
+        task_start = time.monotonic()
+
         from app.services.agent_service import run_approval_agent
         result = asyncio.run(run_approval_agent(
             feature_id=feature_id,
             db=session,
             on_event=on_event,
         ))
+
+        # Track cost/time metrics on feature
+        _update_feature_metrics(session, feature_id, result, task_start)
 
         _publish_feature_event(feature_id, {
             "type": "response",
@@ -186,8 +237,8 @@ def approval_agent_task(self, feature_id: str):
             if feature and feature.agent_task_id == self.request.id:
                 feature.agent_task_id = None
                 session.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Cleanup failed: {e}")
         if lock and lock.owned():
             lock.release()
         session.close()
@@ -390,8 +441,8 @@ def analyze_repository_task(self, repository_id: str):
                     "type": "error", "message": str(e),
                     "repo_id": repository_id, "repo_name": repo.name,
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Cleanup failed: {e}")
     finally:
         session.close()
 

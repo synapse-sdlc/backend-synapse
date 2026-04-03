@@ -24,6 +24,7 @@ async def agent_loop(
     conversation_history: list = None,
     stop_on_text: bool = False,
     on_event: callable = None,
+    custom_skills: dict = None,
 ) -> dict:
     """
     The single agentic loop. This is the entire orchestrator.
@@ -40,7 +41,7 @@ async def agent_loop(
     """
 
     # Build system prompt: base + skill + codebase context
-    skill_content = load_skill(skill_name)
+    skill_content = load_skill(skill_name, project_custom_skills=custom_skills)
     system_prompt = f"""You are the Synapse orchestrator. You analyze codebases,
 generate specs, create technical plans, and produce test cases.
 
@@ -76,6 +77,10 @@ generate specs, create technical plans, and produce test cases.
     for turn in range(max_turns):
         # Context management: compress old tool results if conversation is too large
         _compress_context(messages, system_prompt_len=len(system_prompt))
+
+        # Emit thinking event before LLM call
+        if on_event:
+            on_event({"type": "thinking", "message": f"Turn {turn + 1}/{max_turns}: Reasoning about next action...", "turn": turn + 1})
 
         # Call LLM
         response = await provider.chat(
@@ -205,9 +210,18 @@ generate specs, create technical plans, and produce test cases.
             _exec_tool(tc) for tc in response["tool_calls"]
         ])
 
+        # Emit per-tool activity descriptions for the frontend thought stream
+        if on_event:
+            for tc, res in zip(response["tool_calls"], results):
+                desc = _describe_tool_call(tc, res)
+                if desc:
+                    on_event({"type": "tool_activity", "message": desc, "tool": tc["name"], "turn": turn + 1})
+
+        validation_retry_needed = False
         for tool_call, result in zip(response["tool_calls"], results):
-            if "error" in result and tool_call["name"] == "store_artifact":
-                logger.error(f"store_artifact error: {result['error']}")
+            if tool_call["name"] == "store_artifact" and "error" in result:
+                logger.warning(f"store_artifact validation error: {result['error']}")
+                validation_retry_needed = True
             if tool_call["name"] == "store_artifact" and "artifact_id" in result and on_event:
                 on_event({"type": "artifact_stored", "artifact_id": result["artifact_id"], "turn": turn + 1})
             messages.append({
@@ -216,7 +230,73 @@ generate specs, create technical plans, and produce test cases.
                 "content": json.dumps(result),
             })
 
+        # If store_artifact returned a validation error, tell the agent to fix and retry
+        if validation_retry_needed and turn < max_turns - 1:
+            messages.append({
+                "role": "user",
+                "content": "Your artifact was rejected by validation. Check the error above and fix the issues, then call store_artifact again with corrected content.",
+            })
+            logger.info(f"Turn {turn + 1}: validation retry — telling agent to fix artifact")
+            continue
+
     return {"final_response": "Max turns reached", "turns": max_turns, "messages": messages, "artifact_id": None}
+
+
+def _describe_tool_call(tool_call: dict, result: dict) -> str:
+    """Generate human-readable description of what the tool did."""
+    name = tool_call["name"]
+    args = tool_call.get("arguments", {})
+
+    if "error" in result:
+        return f"{name} failed: {str(result['error'])[:80]}"
+
+    if name == "read_file":
+        path = args.get("path", "?")
+        # Shorten path for readability
+        if "/" in path:
+            path = "/".join(path.split("/")[-3:])
+        lines = result.get("total_lines", "?")
+        return f"Reading {path} ({lines} lines)"
+
+    elif name == "list_directory":
+        path = args.get("path", "?")
+        if "/" in path:
+            path = "/".join(path.split("/")[-2:])
+        count = len(result.get("tree", result.get("entries", [])))
+        return f"Exploring {path} ({count} entries)"
+
+    elif name == "grep_codebase":
+        pattern = args.get("pattern", "?")
+        matches = len(result.get("matches", []))
+        return f"Searching for '{pattern}' ({matches} matches)"
+
+    elif name == "search_codebase":
+        query = args.get("query", "?")
+        results_count = len(result.get("results", []))
+        return f"Semantic search: '{query}' ({results_count} results)"
+
+    elif name == "analyze_ast":
+        path = args.get("file_path", "?")
+        if "/" in path:
+            path = path.split("/")[-1]
+        funcs = len(result.get("functions", []))
+        classes = len(result.get("classes", []))
+        return f"Analyzing {path} ({funcs} functions, {classes} classes)"
+
+    elif name == "store_artifact":
+        art_type = args.get("type", "?")
+        art_name = args.get("name", "?")
+        score = result.get("confidence_score")
+        desc = f"Saving {art_type}: {art_name}"
+        if score is not None:
+            desc += f" (confidence: {score}/100)"
+        return desc
+
+    elif name == "get_artifact":
+        aid = args.get("artifact_id", "?")
+        return f"Retrieving artifact {aid}"
+
+    return f"Running {name}"
 
 
 def _compress_context(messages: list[dict], system_prompt_len: int = 0):

@@ -459,3 +459,36 @@ def export_tests_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+@router.get("/features/{feature_id}/traceability")
+def get_traceability_report(
+    feature_id: UUID,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Analyze traceability gaps across spec -> plan -> tests artifact chain."""
+    feature = _verify_feature_access(db, feature_id, user)
+
+    spec = db.get(Artifact, feature.spec_artifact_id) if feature.spec_artifact_id else None
+    plan = db.get(Artifact, feature.plan_artifact_id) if feature.plan_artifact_id else None
+    tests = db.get(Artifact, feature.tests_artifact_id) if feature.tests_artifact_id else None
+
+    if not all([spec, plan, tests]):
+        missing = []
+        if not spec:
+            missing.append("spec")
+        if not plan:
+            missing.append("plan")
+        if not tests:
+            missing.append("tests")
+        return {"status": "incomplete", "missing": missing, "message": f"Missing artifacts: {', '.join(missing)}"}
+
+    from app.services.traceability_service import detect_gaps
+    report = detect_gaps(
+        spec.content if isinstance(spec.content, dict) else {},
+        plan.content if isinstance(plan.content, dict) else {},
+        tests.content if isinstance(tests.content, dict) else {},
+    )
+    report["status"] = "complete"
+    return report

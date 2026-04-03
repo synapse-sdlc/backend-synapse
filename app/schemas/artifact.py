@@ -16,6 +16,8 @@ class ArtifactResponse(BaseModel):
     version: int
     feature_id: Optional[UUID]
     project_id: Optional[UUID]
+    confidence_score: Optional[int] = None
+    previous_version_id: Optional[str] = None
     created_at: datetime
 
     class Config:

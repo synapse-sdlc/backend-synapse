@@ -19,6 +19,9 @@ class FeatureResponse(BaseModel):
     tests_artifact_id: Optional[str]
     jira_epic_key: Optional[str] = None
     agent_task_id: Optional[str] = None
+    total_turns: int = 0
+    total_duration_ms: int = 0
+    estimated_hours_saved: float = 0.0
     created_at: datetime
 
     class Config:

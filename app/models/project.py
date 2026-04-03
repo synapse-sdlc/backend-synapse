@@ -25,4 +25,5 @@ class Project(Base):
     # New multi-repo fields
     config: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     uploaded_architecture_id: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    custom_skills: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

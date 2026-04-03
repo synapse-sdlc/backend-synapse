@@ -16,6 +16,7 @@ from app.models.feature import Feature
 from app.models.artifact import Artifact
 from app.models.message import Message
 from app.models.repository import Repository
+from app.models.project import Project
 from app.config import get_provider
 from app.services.context_builder import build_agent_context
 
@@ -186,11 +187,30 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
                 status=artifact_data.get("status", "draft"),
                 version=artifact_data.get("version", 1),
                 feature_id=feature.id,
+                project_id=feature.project_id,
+                confidence_score=artifact_data.get("confidence_score"),
             )
             db.merge(db_artifact)
 
             # Update feature phase based on artifact type
-            if art_type == "spec" and feature.spec_artifact_id != aid:
+            # Link previous version when replacing an existing artifact
+            if art_type == "spec" and feature.spec_artifact_id and feature.spec_artifact_id != aid:
+                db_artifact.previous_version_id = feature.spec_artifact_id
+                old = db.get(Artifact, feature.spec_artifact_id)
+                if old:
+                    old.status = "superseded"
+            if art_type == "plan" and feature.plan_artifact_id and feature.plan_artifact_id != aid:
+                db_artifact.previous_version_id = feature.plan_artifact_id
+                old = db.get(Artifact, feature.plan_artifact_id)
+                if old:
+                    old.status = "superseded"
+            if art_type == "tests" and feature.tests_artifact_id and feature.tests_artifact_id != aid:
+                db_artifact.previous_version_id = feature.tests_artifact_id
+                old = db.get(Artifact, feature.tests_artifact_id)
+                if old:
+                    old.status = "superseded"
+
+            if art_type == "spec":
                 feature.spec_artifact_id = aid
                 if feature.phase == "gathering":
                     feature.phase = "spec_review"
@@ -198,7 +218,7 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
                 db.commit()
                 return aid
 
-            if art_type == "plan" and feature.plan_artifact_id != aid:
+            if art_type == "plan":
                 feature.plan_artifact_id = aid
                 if feature.phase in ("spec_review", "plan_review"):
                     feature.phase = "plan_review"
@@ -206,7 +226,7 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
                 db.commit()
                 return aid
 
-            if art_type == "tests" and feature.tests_artifact_id != aid:
+            if art_type == "tests":
                 feature.tests_artifact_id = aid
                 if feature.phase in ("plan_review", "qa_review"):
                     feature.phase = "qa_review"
@@ -258,6 +278,10 @@ async def run_agent_turn(
     ]
     SearchCodebaseTool.set_context(project_id=str(feature.project_id), repo_ids=repo_ids)
 
+    # Load project-level custom skills
+    project = db.get(Project, feature.project_id)
+    project_custom_skills = (project.custom_skills or {}) if project else {}
+
     # Run the core agent loop
     from core.orchestrator.loop import agent_loop
     result = await agent_loop(
@@ -268,6 +292,7 @@ async def run_agent_turn(
         conversation_history=history if history else None,
         stop_on_text=stop_on_text,
         on_event=on_event,
+        custom_skills=project_custom_skills,
     )
 
     # Save new messages to DB
@@ -327,6 +352,10 @@ async def run_approval_agent(
     # Load rich multi-layered context (repos + architecture + knowledge + config)
     codebase_context = build_agent_context(db, feature)
 
+    # Load project-level custom skills
+    project = db.get(Project, feature.project_id)
+    project_custom_skills = (project.custom_skills or {}) if project else {}
+
     from core.orchestrator.loop import agent_loop
     result = await agent_loop(
         provider=provider,
@@ -336,6 +365,7 @@ async def run_approval_agent(
         conversation_history=history if history else None,
         stop_on_text=False,  # Don't stop on text, we want the full artifact
         on_event=on_event,
+        custom_skills=project_custom_skills,
     )
 
     save_new_messages(db, str(feature_id), old_count, result["messages"])

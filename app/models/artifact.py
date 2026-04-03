@@ -1,7 +1,7 @@
 from typing import Optional
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Text, Integer, DateTime, ForeignKey
+from sqlalchemy import String, Text, Integer, Float, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 
@@ -22,4 +22,6 @@ class Artifact(Base):
     feature_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("features.id"), nullable=True)
     project_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=True)
     repo_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    confidence_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 0-100
+    previous_version_id: Mapped[Optional[str]] = mapped_column(String(12), ForeignKey("artifacts.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

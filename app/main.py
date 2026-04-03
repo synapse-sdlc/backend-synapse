@@ -26,7 +26,7 @@ import app.models.api_contract  # noqa: F401
 import app.models.shared_model  # noqa: F401
 
 from app.api import auth, projects, features, artifacts, stream, health, repositories
-from app.api import jira, pull_requests, knowledge
+from app.api import jira, pull_requests, knowledge, skills
 
 
 @asynccontextmanager
@@ -66,4 +66,5 @@ app.include_router(repositories.router, prefix="/api", tags=["repositories"])
 app.include_router(jira.router, prefix="/api", tags=["jira"])
 app.include_router(pull_requests.router, prefix="/api", tags=["pull-requests"])
 app.include_router(knowledge.router, prefix="/api", tags=["knowledge"])
+app.include_router(skills.router, prefix="/api", tags=["skills"])
 app.include_router(stream.router, prefix="/api", tags=["stream"])

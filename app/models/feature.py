@@ -1,7 +1,7 @@
 from typing import Optional
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Text, DateTime, ForeignKey
+from sqlalchemy import String, Text, Integer, Float, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -22,4 +22,7 @@ class Feature(Base):
     tests_artifact_id: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
     jira_epic_key: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     agent_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # Celery task ID for concurrency guard
+    total_turns: Mapped[int] = mapped_column(Integer, default=0)
+    total_duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_hours_saved: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
