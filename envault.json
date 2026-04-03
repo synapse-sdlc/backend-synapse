@@ -1,0 +1,7 @@
+{
+  "profile": "default",
+  "region": "us-east-1",
+  "environments": {
+    "synapse": "synapse/api/secrets"
+  }
+}
