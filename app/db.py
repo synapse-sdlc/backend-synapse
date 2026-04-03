@@ -14,7 +14,7 @@ engine = create_engine(
     pool_pre_ping=True,  # Verify connections before use (catches stale connections)
     pool_recycle=300,  # Recycle connections after 5 min
     echo=False,
-    connect_args={"sslmode": "require"},
+    connect_args={"sslmode": "require" if "localhost" not in sync_url else "disable"},
 )
 SessionLocal = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
 

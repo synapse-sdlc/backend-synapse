@@ -40,11 +40,13 @@ def run_migrations_offline():
 
 
 def run_migrations_online():
+    url = config.get_main_option("sqlalchemy.url") or ""
+    ssl_mode = "disable" if "localhost" in url else "require"
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
-        connect_args={"sslmode": "require"},
+        connect_args={"sslmode": ssl_mode},
     )
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
