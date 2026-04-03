@@ -15,6 +15,12 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
     task_default_queue="synapse-agents",
+    broker_transport_options={
+        "global_keyprefix": "{synapse}.",  # Hash tag forces all keys to same slot
+    },
+    result_backend_transport_options={
+        "global_keyprefix": "{synapse}.",
+    },
 )
 
 celery_app.autodiscover_tasks(["app.workers"])
