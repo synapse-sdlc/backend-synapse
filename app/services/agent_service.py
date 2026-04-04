@@ -242,6 +242,18 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
                 if old:
                     old.status = "superseded"
 
+            # Phase-aware type correction: if agent mislabels artifact type,
+            # correct it based on current phase (e.g., stores "kb" during plan_review → treat as "plan")
+            phase_expected_type = {
+                "gathering": "spec", "spec_review": "spec",
+                "plan_review": "plan", "qa_review": "tests",
+            }
+            expected = phase_expected_type.get(feature.phase)
+            if expected and art_type != expected and art_type not in ("scaffold", "architecture"):
+                logger.warning(f"Agent stored type '{art_type}' during {feature.phase} — correcting to '{expected}'")
+                art_type = expected
+                db_artifact.type = expected
+
             if art_type == "spec":
                 feature.spec_artifact_id = aid
                 if feature.phase == "gathering":
