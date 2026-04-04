@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     aws_secret_access_key: str = ""
     aws_session_token: str = ""  # Only for temporary STS credentials
 
+    # Bedrock Guardrails (optional — set to enable content filtering)
+    bedrock_guardrail_id: str = ""
+    bedrock_guardrail_version: str = "DRAFT"
+
     # GitHub Webhooks — generate with: python -c "import secrets; print(secrets.token_hex(32))"
     github_webhook_secret: str = ""
 
@@ -138,6 +142,8 @@ def get_provider(model_tier=None):
             model=model,
             bearer_token=settings.aws_bearer_token_bedrock or None,
             region=settings.aws_default_region,
+            guardrail_id=settings.bedrock_guardrail_id or None,
+            guardrail_version=settings.bedrock_guardrail_version or "DRAFT",
         )
     else:
         raise ValueError(f"Unknown provider: {provider_name}. Set SYNAPSE_PROVIDER to 'ollama' or 'bedrock'.")

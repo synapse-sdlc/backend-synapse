@@ -6,13 +6,15 @@ from core.orchestrator.providers.base import LLMProvider
 
 
 class BedrockProvider(LLMProvider):
-    def __init__(self, model: str = "anthropic.claude-sonnet-4-6", region: str = None, bearer_token: str = None):
+    def __init__(self, model: str = "anthropic.claude-sonnet-4-6", region: str = None, bearer_token: str = None, guardrail_id: str = None, guardrail_version: str = "DRAFT"):
         import os
         self.model = model
         self.region = region or os.environ.get(
             "AWS_DEFAULT_REGION", "us-east-1")
         self.bearer_token = bearer_token or os.environ.get(
             "AWS_BEARER_TOKEN_BEDROCK", "")
+        self.guardrail_id = guardrail_id
+        self.guardrail_version = guardrail_version
         self.client = None
 
         # Only create boto3 client if no bearer token (bearer uses httpx directly)
@@ -57,6 +59,12 @@ class BedrockProvider(LLMProvider):
         # Bedrock rejects empty toolConfig.tools — only include when tools exist
         if bedrock_tools:
             request_body["toolConfig"] = {"tools": bedrock_tools}
+        # Attach guardrail if configured
+        if self.guardrail_id:
+            request_body["guardrailConfig"] = {
+                "guardrailIdentifier": self.guardrail_id,
+                "guardrailVersion": self.guardrail_version,
+            }
 
         if self.bearer_token:
             response = await self._call_with_bearer(request_body)
@@ -101,6 +109,8 @@ class BedrockProvider(LLMProvider):
         }
         if "toolConfig" in request_body:
             kwargs["toolConfig"] = request_body["toolConfig"]
+        if "guardrailConfig" in request_body:
+            kwargs["guardrailConfig"] = request_body["guardrailConfig"]
         return self.client.converse(**kwargs)
 
     async def _call_with_bearer(self, request_body):
@@ -120,6 +130,8 @@ class BedrockProvider(LLMProvider):
         }
         if "toolConfig" in request_body:
             body["toolConfig"] = request_body["toolConfig"]
+        if "guardrailConfig" in request_body:
+            body["guardrailConfig"] = request_body["guardrailConfig"]
 
         async with httpx.AsyncClient(timeout=300) as client:
             # Try Authorization: Bearer first (standard for ABSK keys)
