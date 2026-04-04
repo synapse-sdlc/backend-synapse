@@ -7,6 +7,19 @@ celery_app = Celery(
     backend=settings.celery_result_backend,
 )
 
+if settings.sentry_dsn:
+    import sentry_sdk
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        environment=settings.sentry_environment,
+        traces_sample_rate=settings.sentry_traces_sample_rate,
+        integrations=[
+            sentry_sdk.integrations.celery.CeleryIntegration(monitor_beat_tasks=True),
+            sentry_sdk.integrations.sqlalchemy.SqlalchemyIntegration(),
+        ],
+        send_default_pii=False,
+    )
+
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],

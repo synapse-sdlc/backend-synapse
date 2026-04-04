@@ -26,5 +26,6 @@ chromadb>=0.5.0
 
 # Observability
 langfuse>=2.0
+sentry-sdk[fastapi,celery,sqlalchemy,asyncio]>=2.0
 openpyxl
 qdrant-client[fastembed]>=1.9.0

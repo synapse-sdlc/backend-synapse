@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     # SDK-standard alias — takes precedence over langfuse_host when set
     langfuse_base_url: str = ""
 
+    # Sentry error monitoring (optional — leave empty to disable)
+    # Get your DSN at https://sentry.io
+    sentry_dsn: str = ""
+    sentry_environment: str = "production"
+    sentry_traces_sample_rate: float = 0.1  # 10% of transactions
+
     class Config:
         env_file = ".env"
         extra = "ignore"
