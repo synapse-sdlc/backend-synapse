@@ -131,7 +131,7 @@ class StoreArtifactTool:
 
 def _upload_to_s3(artifact_id: str, local_path: Path):
     """Upload artifact JSON to S3 for durability. Fails silently if S3 not configured."""
-    import os, boto3
+    import os, boto3, logging
     bucket = os.environ.get("S3_BUCKET", "")
     if not bucket:
         return  # S3 not configured — skip
