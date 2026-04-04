@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # Local fallback (when S3 is not configured)
     local_repos_dir: str = "/tmp/synapse/repos"
 
+    # Vector Store
+    vector_store_provider: str = "chromadb"  # "chromadb" or "qdrant"
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str = ""
+
     # Public URL (for webhook URLs — set to ngrok/production URL)
     public_url: str = "http://localhost:8000"
 

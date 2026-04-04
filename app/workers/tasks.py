@@ -425,7 +425,7 @@ def analyze_repository_task(self, repository_id: str):
         })
         chunks = chunk_analysis_results(analysis)
         store = VectorStore()
-        store.add_chunks(chunks)
+        store.add_chunks_to_repo(project_id, repo_id, chunks)
         logger.info(f"Indexed {len(chunks)} chunks for repo {repo.name}")
 
         # Step 5: Build context summary
@@ -614,7 +614,7 @@ def analyze_codebase_task(self, project_id: str, github_url: str):
         chunks = chunk_analysis_results(analysis)
         store = VectorStore()
         store.add_chunks(chunks)
-        logger.info(f"Indexed {len(chunks)} chunks")
+        logger.info(f"Indexed {len(chunks)} chunks into default collection for project {project_id[:8]}")
 
         codebase_context = build_context_summary(analysis, local_repo_path)
         project.codebase_context = codebase_context
