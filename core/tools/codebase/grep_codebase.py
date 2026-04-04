@@ -99,8 +99,12 @@ class GrepCodebaseTool:
     }
 
     async def execute(self, arguments: dict) -> dict:
+        from core.tools.sandbox import check_path, get_default_root
         pattern_str = arguments["pattern"]
-        search_path = Path(arguments.get("path", ".")).resolve()
+        raw_path = arguments.get("path") or get_default_root()
+        search_path, err = check_path(raw_path)
+        if err:
+            return {"error": err}
         file_glob = arguments.get("file_glob")
         max_results = arguments.get("max_results", 20)
 

@@ -14,8 +14,6 @@ class SearchCodebaseTool:
             "properties": {
                 "query": {"type": "string", "description": "Natural language search query"},
                 "n_results": {"type": "integer", "description": "Number of results to return (default 5)", "default": 5},
-                "repo_id": {"type": "string", "description": "Search only this repo's collection (optional)"},
-                "project_id": {"type": "string", "description": "Search all repos in this project (optional)"},
                 "include_knowledge": {"type": "boolean", "description": "Also search the knowledge base", "default": False},
             }
         }
@@ -34,8 +32,9 @@ class SearchCodebaseTool:
     async def execute(self, arguments: dict) -> dict:
         query = arguments["query"]
         n_results = arguments.get("n_results", 5)
-        repo_id = arguments.get("repo_id")
-        project_id = arguments.get("project_id") or self._context_project_id
+        # Always use enforced context — never from LLM arguments
+        project_id = self._context_project_id
+        repo_id = None  # Use cross-repo search via _context_repo_ids
         include_knowledge = arguments.get("include_knowledge", False)
 
         try:

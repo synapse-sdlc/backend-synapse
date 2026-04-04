@@ -1,6 +1,7 @@
 class ToolRegistry:
-    def __init__(self):
+    def __init__(self, allowed_tools=None):
         self._tools = {}
+        self._allowed = allowed_tools  # set of tool names, or None for all
         self._register_builtins()
 
     def _register_builtins(self):
@@ -17,9 +18,10 @@ class ToolRegistry:
             grep_codebase_tool, analyze_ast_tool, store_artifact_tool,
             get_artifact_tool
         ]:
-            self._tools[tool.name] = tool
+            if self._allowed is None or tool.name in self._allowed:
+                self._tools[tool.name] = tool
 
-    def get_definitions(self) -> list[dict]:
+    def get_definitions(self) -> list:
         return [t.definition for t in self._tools.values()]
 
     async def execute(self, name: str, arguments: dict) -> dict:

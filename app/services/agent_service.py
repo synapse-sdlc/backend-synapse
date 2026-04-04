@@ -17,7 +17,7 @@ from app.models.artifact import Artifact
 from app.models.message import Message
 from app.models.repository import Repository
 from app.models.project import Project
-from app.config import get_provider
+from app.config import get_provider, settings
 from app.services.context_builder import build_agent_context
 
 logger = logging.getLogger(__name__)
@@ -165,7 +165,10 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
 
             # Check what type of artifact was stored by reading from filesystem
             # (the core tool writes to ./artifacts/)
-            artifact_path = Path("./artifacts") / f"{aid}.json"
+            # Check project-scoped dir first, flat fallback
+            artifact_path = Path("./artifacts") / str(feature.project_id) / f"{aid}.json"
+            if not artifact_path.exists():
+                artifact_path = Path("./artifacts") / f"{aid}.json"
             if not artifact_path.exists():
                 continue
 
@@ -308,14 +311,32 @@ async def run_agent_turn(
 
     # Set search context for scoped codebase search
     from core.tools.codebase.search_codebase import SearchCodebaseTool
-    repo_ids = [
-        str(r.id) for r in db.execute(
-            select(Repository).where(
-                Repository.project_id == feature.project_id)
-        ).scalars().all()
-    ]
-    SearchCodebaseTool.set_context(project_id=str(
-        feature.project_id), repo_ids=repo_ids)
+    repos = db.execute(
+        select(Repository).where(Repository.project_id == feature.project_id)
+    ).scalars().all()
+    repo_ids = [str(r.id) for r in repos]
+    SearchCodebaseTool.set_context(project_id=str(feature.project_id), repo_ids=repo_ids)
+
+    # Set file tool sandbox — restrict to user's repos only
+    from pathlib import Path as _Path
+    from core.tools.sandbox import set_sandbox
+    from core.tools.artifacts.store_artifact import StoreArtifactTool
+    from core.tools.artifacts.get_artifact import GetArtifactTool
+
+    sandbox_roots = []
+    for r in repos:
+        repo_path = _Path(settings.local_repos_dir) / str(feature.project_id) / str(r.id) / "repo"
+        if repo_path.exists():
+            sandbox_roots.append(str(repo_path))
+    # Also allow project-scoped artifacts
+    sandbox_roots.append(str((_Path("./artifacts") / str(feature.project_id)).resolve()))
+    # Also allow flat artifacts dir (backward compat)
+    sandbox_roots.append(str(_Path("./artifacts").resolve()))
+    set_sandbox(sandbox_roots)
+
+    # Set artifact context for project-scoped storage
+    StoreArtifactTool.set_context(project_id=str(feature.project_id))
+    GetArtifactTool.set_context(project_id=str(feature.project_id))
 
     # Load project-level custom skills
     project = db.get(Project, feature.project_id)

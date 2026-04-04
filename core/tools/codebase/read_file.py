@@ -28,7 +28,10 @@ class ReadFileTool:
     }
 
     async def execute(self, arguments: dict) -> dict:
-        path = Path(arguments["path"])
+        from core.tools.sandbox import check_path
+        path, err = check_path(arguments["path"])
+        if err:
+            return {"error": err}
         if not path.exists():
             return {"error": f"File not found: {path}"}
         if not path.is_file():

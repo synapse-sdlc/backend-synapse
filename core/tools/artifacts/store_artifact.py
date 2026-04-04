@@ -18,6 +18,11 @@ TYPE_LABELS = {
 
 class StoreArtifactTool:
     name = "store_artifact"
+    _context_project_id = None
+
+    @classmethod
+    def set_context(cls, project_id=None):
+        cls._context_project_id = project_id
     definition = {
         "name": "store_artifact",
         "description": "Store a versioned artifact (spec, plan, architecture, test cases). Every output MUST be stored as an artifact.",
@@ -36,7 +41,8 @@ class StoreArtifactTool:
     }
 
     async def execute(self, arguments: dict) -> dict:
-        ARTIFACT_DIR.mkdir(exist_ok=True)
+        art_dir = ARTIFACT_DIR / self._context_project_id if self._context_project_id else ARTIFACT_DIR
+        art_dir.mkdir(parents=True, exist_ok=True)
 
         art_type = arguments.get("type", "kb")
         art_name = arguments.get("name", "Untitled")
@@ -94,11 +100,11 @@ class StoreArtifactTool:
         }
 
         # Save JSON (always succeeds)
-        json_path = ARTIFACT_DIR / f"{artifact_id}.json"
+        json_path = art_dir / f"{artifact_id}.json"
         json_path.write_text(json.dumps(artifact, indent=2))
 
         # Save readable Markdown (best-effort — never block the JSON save)
-        md_path = ARTIFACT_DIR / f"{artifact_id}.md"
+        md_path = art_dir / f"{artifact_id}.md"
         try:
             md_path.write_text(_to_markdown(artifact))
         except Exception as e:

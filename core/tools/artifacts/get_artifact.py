@@ -8,6 +8,11 @@ logger = logging.getLogger("synapse.tools")
 
 class GetArtifactTool:
     name = "get_artifact"
+    _context_project_id = None
+
+    @classmethod
+    def set_context(cls, project_id=None):
+        cls._context_project_id = project_id
     definition = {
         "name": "get_artifact",
         "description": "Retrieve a previously stored artifact by ID. Use this to read specs, plans, or architecture documents.",
@@ -23,12 +28,22 @@ class GetArtifactTool:
     async def execute(self, arguments: dict) -> dict:
         artifact_id = arguments["artifact_id"]
 
-        # 1. Local cache (fast path)
+        # 1. Project-scoped local cache (fast path)
+        if self._context_project_id:
+            scoped_dir = ARTIFACT_DIR / self._context_project_id
+            scoped_path = scoped_dir / f"{artifact_id}.json"
+            if scoped_path.exists():
+                return json.loads(scoped_path.read_text())
+            matches = list(scoped_dir.glob(f"{artifact_id}*.json")) if scoped_dir.exists() else []
+            if matches:
+                return json.loads(matches[0].read_text())
+
+        # Flat local cache (backward compat)
         filepath = ARTIFACT_DIR / f"{artifact_id}.json"
         if filepath.exists():
             return json.loads(filepath.read_text())
 
-        # Partial match on local cache
+        # Partial match on flat cache
         matches = list(ARTIFACT_DIR.glob(f"{artifact_id}*.json"))
         if matches:
             return json.loads(matches[0].read_text())

@@ -17,7 +17,10 @@ class ListDirectoryTool:
     }
 
     async def execute(self, arguments: dict) -> dict:
-        path = Path(arguments["path"])
+        from core.tools.sandbox import check_path
+        path, err = check_path(arguments["path"])
+        if err:
+            return {"error": err}
         max_depth = arguments.get("max_depth", 2)
         if not path.exists() or not path.is_dir():
             return {"error": f"Not a directory: {path}"}
