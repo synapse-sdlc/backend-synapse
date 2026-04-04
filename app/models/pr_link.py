@@ -31,6 +31,10 @@ class PullRequestLink(Base):
     kb_updated: Mapped[bool] = mapped_column(Boolean, default=False)
     deployment_status: Mapped[Optional[dict]] = mapped_column(
         JSONB, nullable=True)  # {branch, run_url, conclusion, completed_at}
+    branch_name: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True)  # e.g. "feature/SYN-6"
+    jira_issue_key: Mapped[Optional[str]] = mapped_column(
+        String(30), nullable=True)  # e.g. "SYN-6"
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow)
     synced_at: Mapped[Optional[datetime]] = mapped_column(

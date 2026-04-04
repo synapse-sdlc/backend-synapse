@@ -1,5 +1,5 @@
 from app.config import settings as _settings
-from app.api import jira, pull_requests, knowledge, skills, webhooks
+from app.api import jira, pull_requests, knowledge, skills, webhooks, github_config
 from app.api import auth, projects, features, artifacts, stream, health, repositories
 from app.db import engine, Base
 import logging
@@ -44,6 +44,7 @@ import app.models.pr_link  # noqa: F401
 import app.models.knowledge_entry  # noqa: F401
 import app.models.api_contract  # noqa: F401
 import app.models.shared_model  # noqa: F401
+import app.models.github_config  # noqa: F401
 
 
 @asynccontextmanager
@@ -90,6 +91,7 @@ app.include_router(pull_requests.router, prefix="/api", tags=["pull-requests"])
 app.include_router(knowledge.router, prefix="/api", tags=["knowledge"])
 app.include_router(skills.router, prefix="/api", tags=["skills"])
 app.include_router(stream.router, prefix="/api", tags=["stream"])
+app.include_router(github_config.router, prefix="/api", tags=["github"])
 # Webhooks mounted WITHOUT /api prefix — external services (GitHub, Jira) call
 # /webhooks/github and /webhooks/jira/{secret} directly.
 app.include_router(webhooks.router, tags=["webhooks"])

@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 
 from app.db import get_db
+from app.models.github_config import GithubConfig
 from app.models.jira_config import JiraConfig
 from app.utils.events import publish_feature_event
 from app.models.jira_issue_link import JiraIssueLink
@@ -122,8 +123,12 @@ async def github_webhook(
 
 def _handle_pull_request(payload: dict) -> None:
     action = payload.get("action")
-    if action not in ("opened", "synchronize", "closed"):
+    if action not in ("opened", "reopened", "edited", "synchronize", "closed"):
         return
+
+    # Normalise: GitHub sends 'reopened' when a closed PR is re-opened
+    if action == "reopened":
+        action = "opened"
 
     pr = payload.get("pull_request", {})
     repo = payload.get("repository", {})
@@ -185,6 +190,76 @@ def _handle_workflow_run(payload: dict) -> None:
             "pull_requests": run.get("pull_requests", []),
         },
     )
+
+
+@router.post("/webhooks/github/{webhook_secret}", status_code=202)
+async def github_webhook_per_project(
+    webhook_secret: str,
+    request: Request,
+    x_github_event: str = Header(..., alias="X-GitHub-Event"),
+    x_hub_signature_256: str = Header("", alias="X-Hub-Signature-256"),
+    db: Session = Depends(get_db),
+):
+    """Per-project GitHub webhook receiver.
+
+    The ``webhook_secret`` in the URL path routes the delivery to the correct
+    project config.  Payload integrity is then verified using the project's
+    HMAC signing secret.
+    """
+    body = await request.body()
+
+    # 1. Look up project config by URL routing token
+    config = db.execute(
+        select(GithubConfig).where(
+            GithubConfig.webhook_secret == webhook_secret)
+    ).scalars().first()
+    if not config:
+        # Return 200 so GitHub doesn't disable the webhook for repeated 4xx
+        logger.warning("GitHub per-project webhook: unknown routing secret")
+        return JSONResponse(status_code=200, content={"status": "ignored"})
+
+    # 2. Verify HMAC signature if a signing secret is configured
+    if config.signing_secret:
+        if not x_hub_signature_256 or not x_hub_signature_256.startswith("sha256="):
+            logger.warning(
+                "GitHub per-project webhook: missing X-Hub-Signature-256 for project %s",
+                config.project_id,
+            )
+            return JSONResponse(status_code=403, content={"detail": "Missing signature"})
+
+        expected = "sha256=" + hmac.new(
+            config.signing_secret.encode(),
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+
+        if not hmac.compare_digest(expected, x_hub_signature_256):
+            logger.warning(
+                "GitHub per-project webhook: signature mismatch for project %s",
+                config.project_id,
+            )
+            return JSONResponse(status_code=403, content={"detail": "Signature mismatch"})
+
+    if x_github_event == "ping":
+        logger.info(
+            "GitHub per-project ping for project %s (hook_id=%s)",
+            config.project_id,
+            request.headers.get("X-Github-Hook-Id", ""),
+        )
+        return {"accepted": True, "event": "ping"}
+
+    payload = await _parse_payload(request, body)
+
+    if x_github_event == "pull_request":
+        _handle_pull_request(payload)
+    elif x_github_event == "workflow_run":
+        _handle_workflow_run(payload)
+    else:
+        logger.debug(
+            "Unhandled GitHub event '%s' for project %s", x_github_event, config.project_id
+        )
+
+    return {"accepted": True}
 
 
 @router.post("/webhooks/jira/{webhook_secret}")

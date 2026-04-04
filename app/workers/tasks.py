@@ -1,7 +1,9 @@
 import asyncio
 import json
 import logging
+import re
 import time
+from typing import Optional
 
 import redis
 from sqlalchemy import create_engine, select
@@ -1370,6 +1372,148 @@ def pr_kb_update_task(self, feature_id: str, pr_link_id: str):
         session.close()
 
 
+def parse_jira_key_from_branch(branch: str) -> Optional[str]:
+    """Extract a Jira issue key from a branch name.
+
+    Matches patterns like feature/SYN-6, feature/SYN_6, feature/SYN-6-some-slug,
+    feat/ABC-123, etc.  Returns the uppercased, dash-normalised key or None.
+    """
+    m = re.search(r'(?:^|/)([A-Za-z]{2,10}[-_]\d+)', branch)
+    return m.group(1).upper().replace('_', '-') if m else None
+
+
+def _auto_create_pr_link(
+    session: Session,
+    repo_full_name: str,
+    pr_number: int,
+    pr_payload: dict,
+) -> None:
+    """Auto-create a PullRequestLink when a PR is opened with a Jira-keyed branch.
+
+    Searches for the Jira issue key in:
+      1. Branch name (head_branch field)
+      2. PR title (fallback when branch has no key)
+
+    Then finds the owning feature via jira_issue_links or feature.jira_epic_key.
+    """
+    from app.models.pr_link import PullRequestLink
+    from app.models.jira_issue_link import JiraIssueLink
+    from app.models.feature import Feature
+
+    branch_name = pr_payload.get("head_branch", "")
+    pr_title = pr_payload.get("title", "")
+
+    # Try branch name first, then PR title as fallback
+    _title_match = re.search(r'\b([A-Za-z]{2,10}[-_]\d+)\b', pr_title)
+    jira_key = (
+        parse_jira_key_from_branch(branch_name)
+        or (_title_match and _title_match.group(1).upper().replace('_', '-'))
+    )
+
+    if not jira_key:
+        logger.debug(
+            "webhook_pr_update_task: no Jira key in branch %r or title %r, skipping auto-create",
+            branch_name, pr_title)
+        return
+
+    # Primary lookup: jira_issue_links table
+    issue_link = session.execute(
+        select(JiraIssueLink).where(JiraIssueLink.issue_key == jira_key)
+    ).scalar_one_or_none()
+
+    if issue_link:
+        target_feature_id = issue_link.feature_id
+    else:
+        # Fallback: match against feature.jira_epic_key
+        feature_row = session.execute(
+            select(Feature).where(Feature.jira_epic_key == jira_key)
+        ).scalar_one_or_none()
+        if feature_row:
+            target_feature_id = feature_row.id
+        else:
+            logger.warning(
+                "webhook_pr_update_task: no feature found for Jira key %s "
+                "(branch=%r, pr=%s#%s) — Jira export may not have run yet",
+                jira_key, branch_name, repo_full_name, pr_number)
+            return
+
+    pr_url = f"https://github.com/{repo_full_name}/pull/{pr_number}"
+
+    # Determine state from the payload (handles both opened and closed events)
+    merged = pr_payload.get("merged", False)
+    if merged:
+        state = "merged"
+    elif pr_payload.get("state") == "closed":
+        state = "closed"
+    else:
+        state = "open"
+
+    link = PullRequestLink(
+        feature_id=target_feature_id,
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
+        pr_url=pr_url,
+        title=pr_title or f"PR #{pr_number}",
+        state=state,
+        merged_at=pr_payload.get("merged_at"),
+        branch_name=branch_name or None,
+        jira_issue_key=jira_key,
+    )
+    session.add(link)
+    session.flush()  # get link.id
+
+    # Fetch commits, files, and diff from GitHub
+    try:
+        from app.models.repository import Repository
+        from app.models.project import Project
+        from app.utils.crypto import decrypt_token
+        from app.services.github_service import GitHubService
+
+        feature = session.get(Feature, target_feature_id)
+        token = None
+        if feature:
+            repos = session.execute(
+                select(Repository).where(
+                    Repository.project_id == feature.project_id)
+            ).scalars().all()
+            for r in repos:
+                if r.github_token_encrypted:
+                    token = decrypt_token(r.github_token_encrypted)
+                    break
+            if not token:
+                project = session.get(Project, feature.project_id)
+                if project and project.github_token_encrypted:
+                    token = decrypt_token(project.github_token_encrypted)
+
+        if token:
+            svc = GitHubService(token)
+            owner, repo = repo_full_name.split("/", 1)
+            link.commit_messages = asyncio.run(
+                svc.get_pr_commits(owner, repo, pr_number))
+            link.files_changed = asyncio.run(
+                svc.get_pr_files(owner, repo, pr_number))
+            diff = asyncio.run(
+                svc.get_pr_diff(owner, repo, pr_number))
+            link.diff_summary = diff[:5000] if diff else None
+    except Exception as e:
+        logger.warning(
+            "Failed to fetch PR details during auto-create for %s#%s: %s",
+            repo_full_name, pr_number, e)
+
+    session.commit()
+
+    event_type = "pr_merged" if state == "merged" else "pr_opened"
+    _publish_feature_event(str(target_feature_id), {
+        "type": event_type,
+        "pr_url": pr_url,
+        "branch": branch_name,
+        "jira_issue_key": jira_key,
+    })
+    logger.info(
+        "Auto-created PR link for %s#%s → feature %s (jira_key=%s, state=%s)",
+        repo_full_name, pr_number, target_feature_id, jira_key, state)
+
+
 @celery_app.task(bind=True, name="app.workers.tasks.webhook_pr_update_task", time_limit=120, max_retries=0)
 def webhook_pr_update_task(
     self,
@@ -1385,6 +1529,11 @@ def webhook_pr_update_task(
     """
     from datetime import datetime
 
+    logger.info(
+        "webhook_pr_update_task: action=%s repo=%s pr=%s branch=%r title=%r",
+        action, repo_full_name, pr_number,
+        pr_payload.get("head_branch", ""), pr_payload.get("title", ""))
+
     session = _get_sync_session()
     try:
         from app.models.pr_link import PullRequestLink
@@ -1399,14 +1548,48 @@ def webhook_pr_update_task(
         ).scalars().all()
 
         if not links:
-            logger.debug(
-                "webhook_pr_update_task: no links found for %s#%s", repo_full_name, pr_number)
+            if action in ("opened", "closed"):
+                _auto_create_pr_link(
+                    session, repo_full_name, pr_number, pr_payload)
+            else:
+                logger.debug(
+                    "webhook_pr_update_task: no links found for %s#%s",
+                    repo_full_name, pr_number)
             return
 
         for link in links:
             feature_id = str(link.feature_id)
 
-            if action == "synchronize":
+            # Always update title and branch from the latest payload
+            new_title = pr_payload.get("title", "")
+            if new_title and new_title != link.title:
+                link.title = new_title
+            branch_name = pr_payload.get("head_branch", "")
+            if branch_name and not link.branch_name:
+                link.branch_name = branch_name
+
+            # Re-extract jira key on open/edit events only (not on close)
+            if action in ("opened", "edited", "synchronize"):
+                _title_match = re.search(
+                    r'\b([A-Za-z]{2,10}[-_]\d+)\b', new_title or link.title or "")
+                new_jira_key = (
+                    parse_jira_key_from_branch(
+                        branch_name or link.branch_name or "")
+                    or (_title_match and _title_match.group(1).upper().replace('_', '-'))
+                )
+                if new_jira_key and new_jira_key != link.jira_issue_key:
+                    link.jira_issue_key = new_jira_key
+
+            if action == "edited":
+                # Title/body edit only — just persist the title update above
+                link.synced_at = datetime.utcnow()
+                _publish_feature_event(feature_id, {
+                    "type": "pr_updated",
+                    "pr_url": link.pr_url,
+                    "action": "edited",
+                })
+
+            elif action == "synchronize":
                 # New commits pushed — fetch fresh diff/files/commits via GitHub API
                 feature = session.get(Feature, link.feature_id)
                 if feature:
@@ -1516,9 +1699,47 @@ def webhook_pr_update_task(
                 link.synced_at = datetime.utcnow()
 
             elif action == "opened":
-                # PR was just opened — refresh state (may have been pre-linked as closed)
+                # PR opened/reopened — refresh state and fetch latest commits/files
                 link.state = "open"
                 link.synced_at = datetime.utcnow()
+
+                feature = session.get(Feature, link.feature_id)
+                if feature:
+                    from app.models.repository import Repository
+                    from app.models.project import Project
+                    from app.utils.crypto import decrypt_token
+
+                    token = None
+                    repos = session.execute(
+                        select(Repository).where(
+                            Repository.project_id == feature.project_id)
+                    ).scalars().all()
+                    for r in repos:
+                        if r.github_token_encrypted:
+                            token = decrypt_token(r.github_token_encrypted)
+                            break
+                    if not token:
+                        project = session.get(Project, feature.project_id)
+                        if project and project.github_token_encrypted:
+                            token = decrypt_token(
+                                project.github_token_encrypted)
+
+                    if token:
+                        svc = GitHubService(token)
+                        owner, repo = repo_full_name.split("/", 1)
+                        try:
+                            link.commit_messages = asyncio.run(
+                                svc.get_pr_commits(owner, repo, pr_number))
+                            link.files_changed = asyncio.run(
+                                svc.get_pr_files(owner, repo, pr_number))
+                            diff = asyncio.run(
+                                svc.get_pr_diff(owner, repo, pr_number))
+                            link.diff_summary = diff[:5000] if diff else None
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to fetch PR details on open for %s#%s: %s",
+                                repo_full_name, pr_number, e)
+
                 _publish_feature_event(feature_id, {
                     "type": "pr_opened",
                     "pr_url": link.pr_url,

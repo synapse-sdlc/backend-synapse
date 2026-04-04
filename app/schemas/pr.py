@@ -22,6 +22,10 @@ class PullRequestLinkResponse(BaseModel):
     commit_messages: Optional[list] = None
     kb_updated: bool
     deployment_status: Optional[dict] = None
+    branch_name: Optional[str] = None
+    jira_issue_key: Optional[str] = None
+    # populated at query time, not stored on model
+    jira_site_url: Optional[str] = None
     created_at: datetime
     synced_at: Optional[datetime] = None
 

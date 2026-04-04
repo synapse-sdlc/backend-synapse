@@ -43,7 +43,8 @@ def _get_github_token(db: Session, feature: Feature) -> str:
     if project and project.github_token_encrypted:
         return decrypt_token(project.github_token_encrypted)
 
-    raise HTTPException(status_code=400, detail="No GitHub token configured for this project")
+    raise HTTPException(
+        status_code=400, detail="No GitHub token configured for this project")
 
 
 @router.post("/features/{feature_id}/pr-links", response_model=PullRequestLinkResponse, status_code=201)
@@ -76,7 +77,8 @@ async def link_pr(
         pr_number=pr_number,
         pr_url=body.pr_url,
         title=pr_data.get("title", ""),
-        state="merged" if pr_data.get("merged_at") else pr_data.get("state", "open"),
+        state="merged" if pr_data.get(
+            "merged_at") else pr_data.get("state", "open"),
         merged_at=pr_data.get("merged_at"),
     )
     db.add(link)
@@ -93,14 +95,28 @@ def list_pr_links(
     limit: int = Query(50, le=200),
     offset: int = Query(0),
 ):
-    _verify_feature_access(db, feature_id, user)
+    feature = _verify_feature_access(db, feature_id, user)
+
+    from app.models.jira_config import JiraConfig
+    jira_config = db.execute(
+        select(JiraConfig).where(JiraConfig.project_id == feature.project_id)
+    ).scalar_one_or_none()
+    jira_site_url = jira_config.site_url if jira_config else None
+
     result = db.execute(
         select(PullRequestLink)
         .where(PullRequestLink.feature_id == feature_id)
         .order_by(PullRequestLink.created_at)
         .limit(limit).offset(offset)
     )
-    return result.scalars().all()
+    links = result.scalars().all()
+
+    responses = []
+    for link in links:
+        resp = PullRequestLinkResponse.model_validate(link)
+        resp.jira_site_url = jira_site_url
+        responses.append(resp)
+    return responses
 
 
 @router.post("/features/{feature_id}/pr-links/{pr_link_id}/sync", response_model=PullRequestLinkResponse)
@@ -123,7 +139,8 @@ async def sync_pr(
     pr_data = await svc.get_pull_request(owner, repo, link.pr_number)
 
     was_open = link.state == "open"
-    link.state = "merged" if pr_data.get("merged_at") else pr_data.get("state", "open")
+    link.state = "merged" if pr_data.get(
+        "merged_at") else pr_data.get("state", "open")
     link.merged_at = pr_data.get("merged_at")
     link.synced_at = datetime.utcnow()
 
