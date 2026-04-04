@@ -597,3 +597,89 @@ def get_task_prompt(
         if p["subtask_id"] == subtask_id:
             return p
     raise HTTPException(status_code=404, detail=f"Subtask {subtask_id} not found")
+
+
+def _load_export_data(db, feature):
+    """Load all artifacts + knowledge + traceability for export."""
+    spec_a = db.get(Artifact, feature.spec_artifact_id) if feature.spec_artifact_id else None
+    plan_a = db.get(Artifact, feature.plan_artifact_id) if feature.plan_artifact_id else None
+    tests_a = db.get(Artifact, feature.tests_artifact_id) if feature.tests_artifact_id else None
+    scaffold_a = db.get(Artifact, feature.scaffold_artifact_id) if feature.scaffold_artifact_id else None
+
+    spec_c = spec_a.content if spec_a and isinstance(spec_a.content, dict) else {}
+    plan_c = plan_a.content if plan_a and isinstance(plan_a.content, dict) else {}
+    tests_c = tests_a.content if tests_a and isinstance(tests_a.content, dict) else {}
+    scaffold_c = scaffold_a.content if scaffold_a and isinstance(scaffold_a.content, dict) else {}
+
+    from app.models.knowledge_entry import KnowledgeEntry
+    kb_entries = db.execute(
+        select(KnowledgeEntry).where(KnowledgeEntry.project_id == feature.project_id).limit(50)
+    ).scalars().all()
+
+    trace = None
+    if spec_c and plan_c and tests_c:
+        from app.services.traceability_service import detect_gaps
+        trace = detect_gaps(spec_c, plan_c, tests_c)
+        trace["status"] = "complete"
+
+    return spec_c, plan_c, tests_c, scaffold_c, kb_entries, trace
+
+
+@router.get("/features/{feature_id}/export/xlsx")
+def export_xlsx(
+    feature_id: UUID,
+    token: str = Query(None),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_optional_user),
+):
+    """Export feature as multi-sheet Excel workbook."""
+    if not user and token:
+        from app.utils.auth import decode_access_token
+        payload = decode_access_token(token)
+        if payload:
+            user = CurrentUser(id=UUID(payload["sub"]), org_id=UUID(payload["org_id"]), role=payload.get("role", "admin"), name=payload.get("name", ""))
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    feature = _verify_feature_access(db, feature_id, user)
+    spec_c, plan_c, tests_c, scaffold_c, kb_entries, trace = _load_export_data(db, feature)
+
+    from app.services.export_service import export_feature_xlsx
+    xlsx_bytes = export_feature_xlsx(feature, spec_c, plan_c, tests_c, scaffold_c, kb_entries, trace)
+
+    fname = (spec_c.get("feature_name") or feature.description or "feature")[:40].replace(" ", "_")
+    return StreamingResponse(
+        iter([xlsx_bytes]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}.xlsx"},
+    )
+
+
+@router.get("/features/{feature_id}/export/markdown")
+def export_markdown(
+    feature_id: UUID,
+    token: str = Query(None),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_optional_user),
+):
+    """Export feature as full markdown document."""
+    if not user and token:
+        from app.utils.auth import decode_access_token
+        payload = decode_access_token(token)
+        if payload:
+            user = CurrentUser(id=UUID(payload["sub"]), org_id=UUID(payload["org_id"]), role=payload.get("role", "admin"), name=payload.get("name", ""))
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    feature = _verify_feature_access(db, feature_id, user)
+    spec_c, plan_c, tests_c, scaffold_c, kb_entries, trace = _load_export_data(db, feature)
+
+    from app.services.export_service import export_feature_markdown
+    md = export_feature_markdown(feature, spec_c, plan_c, tests_c, scaffold_c, kb_entries, trace)
+
+    fname = (spec_c.get("feature_name") or feature.description or "feature")[:40].replace(" ", "_")
+    return StreamingResponse(
+        iter([md]),
+        media_type="text/markdown",
+        headers={"Content-Disposition": f"attachment; filename={fname}.md"},
+    )
