@@ -530,3 +530,70 @@ def generate_scaffold(
     db.commit()
 
     return {"status": "accepted", "task_id": task.id}
+
+
+@router.get("/features/{feature_id}/task-prompts")
+def get_task_prompts(
+    feature_id: UUID,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Generate AI coding prompts for all subtasks in the plan."""
+    feature = _verify_feature_access(db, feature_id, user)
+
+    if not feature.plan_artifact_id:
+        raise HTTPException(status_code=400, detail="Plan artifact required")
+
+    spec_a = db.get(Artifact, feature.spec_artifact_id) if feature.spec_artifact_id else None
+    plan_a = db.get(Artifact, feature.plan_artifact_id)
+    tests_a = db.get(Artifact, feature.tests_artifact_id) if feature.tests_artifact_id else None
+    scaffold_a = db.get(Artifact, feature.scaffold_artifact_id) if feature.scaffold_artifact_id else None
+
+    spec_c = spec_a.content if spec_a and isinstance(spec_a.content, dict) else {}
+    plan_c = plan_a.content if plan_a and isinstance(plan_a.content, dict) else {}
+    tests_c = tests_a.content if tests_a and isinstance(tests_a.content, dict) else {}
+    scaffold_c = scaffold_a.content if scaffold_a and isinstance(scaffold_a.content, dict) else {}
+
+    # Load knowledge entries
+    from app.models.knowledge_entry import KnowledgeEntry
+    kb_entries = db.execute(
+        select(KnowledgeEntry).where(
+            KnowledgeEntry.project_id == feature.project_id,
+            KnowledgeEntry.entry_type.in_(["pattern", "decision"]),
+        ).limit(10)
+    ).scalars().all()
+
+    # Get repo info
+    from app.models.repository import Repository
+    repo = db.execute(
+        select(Repository).where(Repository.project_id == feature.project_id).limit(1)
+    ).scalars().first()
+
+    from app.services.prompt_builder import build_all_task_prompts
+    prompts = build_all_task_prompts(
+        spec_content=spec_c,
+        plan_content=plan_c,
+        tests_content=tests_c,
+        scaffold_content=scaffold_c,
+        knowledge_entries=kb_entries,
+        repo_name=repo.name if repo else "",
+        repo_type=repo.repo_type if repo else "",
+        feature_name=spec_c.get("feature_name", feature.description),
+    )
+
+    return {"feature_name": spec_c.get("feature_name", feature.description), "prompts": prompts}
+
+
+@router.get("/features/{feature_id}/task-prompts/{subtask_id}")
+def get_task_prompt(
+    feature_id: UUID,
+    subtask_id: str,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Generate AI coding prompt for a single subtask."""
+    result = get_task_prompts(feature_id, db, user)
+    for p in result["prompts"]:
+        if p["subtask_id"] == subtask_id:
+            return p
+    raise HTTPException(status_code=404, detail=f"Subtask {subtask_id} not found")
