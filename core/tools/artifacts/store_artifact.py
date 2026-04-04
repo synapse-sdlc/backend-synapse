@@ -118,7 +118,7 @@ class StoreArtifactTool:
         s3_synced = "pending"
         try:
             import threading
-            threading.Thread(target=_upload_to_s3, args=(artifact_id, json_path), daemon=True).start()
+            threading.Thread(target=_upload_to_s3, args=(artifact_id, json_path, self._context_project_id), daemon=True).start()
         except Exception as e:
             s3_synced = False
             logging.getLogger("synapse.tools").warning(f"S3 upload schedule failed (non-fatal): {e}")
@@ -135,7 +135,7 @@ class StoreArtifactTool:
         }
 
 
-def _upload_to_s3(artifact_id: str, local_path: Path):
+def _upload_to_s3(artifact_id: str, local_path: Path, project_id: str = None):
     """Upload artifact JSON to S3 for durability. Fails silently if S3 not configured."""
     import os, boto3, logging
     bucket = os.environ.get("S3_BUCKET", "")
@@ -143,10 +143,11 @@ def _upload_to_s3(artifact_id: str, local_path: Path):
         return  # S3 not configured — skip
     prefix = os.environ.get("S3_ARTIFACTS_PREFIX", "artifacts")
     region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+    s3_key = f"{prefix}/{project_id}/{artifact_id}.json" if project_id else f"{prefix}/{artifact_id}.json"
     try:
         s3 = boto3.client("s3", region_name=region)
-        s3.upload_file(str(local_path), bucket, f"{prefix}/{artifact_id}.json")
-        logging.getLogger("synapse.tools").info(f"Artifact {artifact_id} synced to s3://{bucket}/{prefix}/{artifact_id}.json")
+        s3.upload_file(str(local_path), bucket, s3_key)
+        logging.getLogger("synapse.tools").info(f"Artifact {artifact_id} synced to s3://{bucket}/{s3_key}")
     except Exception as e:
         logging.getLogger("synapse.tools").warning(f"S3 upload failed for {artifact_id}: {e}")
 
