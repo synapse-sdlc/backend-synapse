@@ -434,6 +434,7 @@ def analyze_repository_task(self, repository_id: str):
         codebase_context = build_context_summary(analysis, local_repo_path)
         repo.codebase_context = codebase_context
         session.commit()
+        logger.info(f"Codebase context saved for repo {repo.name}: {len(codebase_context or '')} chars")
 
         # Step 6: Run agent to generate per-repo architecture
         _publish_project_event(project_id, {
@@ -459,6 +460,12 @@ def analyze_repository_task(self, repository_id: str):
                         "\n\n## Existing Architecture Document (provided by team)\n"
                         + arch_content
                     )
+
+        # Set artifact context for project-scoped storage
+        from core.tools.artifacts.store_artifact import StoreArtifactTool
+        from core.tools.artifacts.get_artifact import GetArtifactTool
+        StoreArtifactTool.set_context(project_id=project_id)
+        GetArtifactTool.set_context(project_id=project_id)
 
         provider = get_provider()
         from core.orchestrator.loop import agent_loop
@@ -490,11 +497,18 @@ def analyze_repository_task(self, repository_id: str):
             f"Architecture generated for {repo.name} in {result['turns']} turns")
 
         # Step 7: Save architecture artifact to DB
-        if result.get("artifact_id"):
+        artifact_id = result.get("artifact_id")
+        logger.info(f"Agent loop returned artifact_id={artifact_id} for repo {repo.name}")
+
+        if artifact_id:
             from pathlib import Path
 
-            artifact_path = Path("./artifacts") / \
-                f"{result['artifact_id']}.json"
+            # Check project-scoped dir first, flat fallback
+            artifact_path = Path("./artifacts") / project_id / f"{artifact_id}.json"
+            if not artifact_path.exists():
+                artifact_path = Path("./artifacts") / f"{artifact_id}.json"
+                logger.info(f"Artifact not in scoped dir, trying flat: {artifact_path}")
+
             if artifact_path.exists():
                 artifact_data = json.loads(artifact_path.read_text())
                 content = artifact_data.get("content", "")
@@ -518,6 +532,11 @@ def analyze_repository_task(self, repository_id: str):
                     repo_id=repo.id,
                 )
                 session.merge(db_artifact)
+                logger.info(f"Architecture artifact {artifact_id} saved to DB for repo {repo.name}")
+            else:
+                logger.error(f"Architecture artifact file NOT FOUND at {artifact_path} — artifact will be missing from DB")
+        else:
+            logger.warning(f"Agent loop returned no artifact_id for repo {repo.name} — architecture not generated")
 
         # Step 8: Mark repo as ready
         repo.analysis_status = "ready"
@@ -624,6 +643,13 @@ def analyze_codebase_task(self, project_id: str, github_url: str):
 
         _publish_project_event(
             project_id, {"type": "step", "step": "Generating architecture overview..."})
+
+        # Set artifact context for project-scoped storage
+        from core.tools.artifacts.store_artifact import StoreArtifactTool
+        from core.tools.artifacts.get_artifact import GetArtifactTool
+        StoreArtifactTool.set_context(project_id=project_id)
+        GetArtifactTool.set_context(project_id=project_id)
+
         provider = get_provider()
         from core.orchestrator.loop import agent_loop
         result = asyncio.run(agent_loop(
@@ -638,8 +664,9 @@ def analyze_codebase_task(self, project_id: str, github_url: str):
             from app.models.artifact import Artifact
             from pathlib import Path
 
-            artifact_path = Path("./artifacts") / \
-                f"{result['artifact_id']}.json"
+            artifact_path = Path("./artifacts") / project_id / f"{result['artifact_id']}.json"
+            if not artifact_path.exists():
+                artifact_path = Path("./artifacts") / f"{result['artifact_id']}.json"
             if artifact_path.exists():
                 artifact_data = json.loads(artifact_path.read_text())
                 db_artifact = Artifact(
@@ -700,6 +727,12 @@ def kb_update_task(self, feature_id: str):
         _publish_feature_event(
             feature_id, {"type": "thinking", "message": "Generating knowledge base entry..."})
 
+        # Set artifact context for project-scoped storage
+        from core.tools.artifacts.store_artifact import StoreArtifactTool
+        from core.tools.artifacts.get_artifact import GetArtifactTool
+        StoreArtifactTool.set_context(project_id=str(feature.project_id))
+        GetArtifactTool.set_context(project_id=str(feature.project_id))
+
         provider = get_provider()
         from core.orchestrator.loop import agent_loop
 
@@ -723,8 +756,9 @@ def kb_update_task(self, feature_id: str):
             from app.models.artifact import Artifact
             from pathlib import Path
 
-            artifact_path = Path("./artifacts") / \
-                f"{result['artifact_id']}.json"
+            artifact_path = Path("./artifacts") / str(feature.project_id) / f"{result['artifact_id']}.json"
+            if not artifact_path.exists():
+                artifact_path = Path("./artifacts") / f"{result['artifact_id']}.json"
             if artifact_path.exists():
                 artifact_data = json.loads(artifact_path.read_text())
                 content = artifact_data.get("content", "")
@@ -1337,8 +1371,9 @@ def pr_kb_update_task(self, feature_id: str, pr_link_id: str):
             from app.models.artifact import Artifact
             from pathlib import Path
 
-            artifact_path = Path("./artifacts") / \
-                f"{result['artifact_id']}.json"
+            artifact_path = Path("./artifacts") / str(feature.project_id) / f"{result['artifact_id']}.json"
+            if not artifact_path.exists():
+                artifact_path = Path("./artifacts") / f"{result['artifact_id']}.json"
             if artifact_path.exists():
                 artifact_data = json.loads(artifact_path.read_text())
                 content = artifact_data.get("content", "")
@@ -2052,8 +2087,9 @@ def synthesize_project_task(self, project_id: str):
         # Save project_architecture artifact to DB
         if result.get("artifact_id"):
             from pathlib import Path
-            artifact_path = Path("./artifacts") / \
-                f"{result['artifact_id']}.json"
+            artifact_path = Path("./artifacts") / str(feature.project_id) / f"{result['artifact_id']}.json"
+            if not artifact_path.exists():
+                artifact_path = Path("./artifacts") / f"{result['artifact_id']}.json"
             if artifact_path.exists():
                 artifact_data = json.loads(artifact_path.read_text())
                 content = artifact_data.get("content", "")
