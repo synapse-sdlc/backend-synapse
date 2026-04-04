@@ -116,7 +116,8 @@ def create_feature(
         f'Follow the spec-drafting skill instructions. Start with Phase 1: '
         f'ask 3-5 clarifying questions before generating anything.'
     )
-    task = agent_run_task.delay(str(feature.id), initial_message)
+    model_tier = _resolve_model_tier(db, feature)
+    task = agent_run_task.delay(str(feature.id), initial_message, model_tier)
     _record_task_id(db, feature, task.id)
 
     return feature
@@ -277,7 +278,8 @@ def reject_artifact(
         f"Feedback: {body.reason}\n\n"
         f"Please revise the {artifact_type} based on this feedback."
     )
-    task = agent_run_task.delay(str(feature_id), revision_prompt)
+    model_tier = _resolve_model_tier(db, feature)
+    task = agent_run_task.delay(str(feature_id), revision_prompt, model_tier)
     _record_task_id(db, feature, task.id)
 
     db.refresh(feature)
