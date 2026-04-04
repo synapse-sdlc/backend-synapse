@@ -467,6 +467,15 @@ def analyze_repository_task(self, repository_id: str):
         StoreArtifactTool.set_context(project_id=project_id)
         GetArtifactTool.set_context(project_id=project_id)
 
+        # Set sandbox to allow agent to read the cloned repo + artifacts
+        from core.tools.sandbox import set_sandbox
+        from pathlib import Path as _SPath
+        set_sandbox([
+            str(local_repo_path),
+            str((_SPath("./artifacts") / project_id).resolve()),
+            str(_SPath("./artifacts").resolve()),
+        ])
+
         provider = get_provider()
         from core.orchestrator.loop import agent_loop
 
@@ -644,11 +653,19 @@ def analyze_codebase_task(self, project_id: str, github_url: str):
         _publish_project_event(
             project_id, {"type": "step", "step": "Generating architecture overview..."})
 
-        # Set artifact context for project-scoped storage
+        # Set artifact context + sandbox for project-scoped storage
         from core.tools.artifacts.store_artifact import StoreArtifactTool
         from core.tools.artifacts.get_artifact import GetArtifactTool
         StoreArtifactTool.set_context(project_id=project_id)
         GetArtifactTool.set_context(project_id=project_id)
+
+        from core.tools.sandbox import set_sandbox
+        from pathlib import Path as _SPath
+        set_sandbox([
+            str(local_repo_path),
+            str((_SPath("./artifacts") / project_id).resolve()),
+            str(_SPath("./artifacts").resolve()),
+        ])
 
         provider = get_provider()
         from core.orchestrator.loop import agent_loop
