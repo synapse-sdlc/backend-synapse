@@ -282,6 +282,56 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
     return None
 
 
+def _setup_agent_context(db: Session, feature: Feature) -> dict:
+    """Shared setup for all agent runs: sandbox, artifact context, repo sync, search context.
+
+    Returns project_custom_skills dict.
+    """
+    from pathlib import Path as _Path
+    from core.tools.codebase.search_codebase import SearchCodebaseTool
+    from core.tools.sandbox import set_sandbox
+    from core.tools.artifacts.store_artifact import StoreArtifactTool
+    from core.tools.artifacts.get_artifact import GetArtifactTool
+
+    project_id = str(feature.project_id)
+
+    # Search context
+    repos = db.execute(
+        select(Repository).where(Repository.project_id == feature.project_id)
+    ).scalars().all()
+    repo_ids = [str(r.id) for r in repos]
+    SearchCodebaseTool.set_context(project_id=project_id, repo_ids=repo_ids)
+
+    # Ensure repos are on local disk (sync from S3 if missing after restart/deploy)
+    for r in repos:
+        repo_path = _Path(settings.local_repos_dir) / project_id / str(r.id) / "repo"
+        if not repo_path.exists() and r.s3_repo_key:
+            try:
+                from app.services.project_service import download_repo_from_s3
+                download_repo_from_s3(project_id, r.s3_repo_key, str(r.id))
+                logger.info(f"Synced repo {r.name} from S3 for agent access")
+            except Exception as e:
+                logger.warning(f"Failed to sync repo {r.name} from S3: {e}")
+
+    # File sandbox — restrict to user's repos + artifacts only
+    sandbox_roots = []
+    for r in repos:
+        repo_path = _Path(settings.local_repos_dir) / project_id / str(r.id) / "repo"
+        if repo_path.exists():
+            sandbox_roots.append(str(repo_path))
+    sandbox_roots.append(str((_Path("./artifacts") / project_id).resolve()))
+    sandbox_roots.append(str(_Path("./artifacts").resolve()))
+    set_sandbox(sandbox_roots)
+
+    # Artifact context — project-scoped storage
+    StoreArtifactTool.set_context(project_id=project_id)
+    GetArtifactTool.set_context(project_id=project_id)
+
+    # Project custom skills
+    project = db.get(Project, feature.project_id)
+    return (project.custom_skills or {}) if project else {}
+
+
 async def run_agent_turn(
     feature_id: str,
     user_message: str,
@@ -311,54 +361,7 @@ async def run_agent_turn(
     # Load rich multi-layered context (repos + architecture + knowledge + config)
     codebase_context = build_agent_context(db, feature)
 
-    # Set search context for scoped codebase search
-    from core.tools.codebase.search_codebase import SearchCodebaseTool
-    repos = db.execute(
-        select(Repository).where(Repository.project_id == feature.project_id)
-    ).scalars().all()
-    repo_ids = [str(r.id) for r in repos]
-    SearchCodebaseTool.set_context(project_id=str(
-        feature.project_id), repo_ids=repo_ids)
-
-    # Ensure repos are on local disk (sync from S3 if missing after restart/deploy)
-    from pathlib import Path as _Path
-    for r in repos:
-        repo_path = _Path(settings.local_repos_dir) / \
-            str(feature.project_id) / str(r.id) / "repo"
-        if not repo_path.exists() and r.s3_repo_key:
-            try:
-                from app.services.project_service import download_repo_from_s3
-                download_repo_from_s3(
-                    str(feature.project_id), r.s3_repo_key, str(r.id))
-                logger.info(f"Synced repo {r.name} from S3 for agent access")
-            except Exception as e:
-                logger.warning(f"Failed to sync repo {r.name} from S3: {e}")
-
-    # Set file tool sandbox — restrict to user's repos only
-    from core.tools.sandbox import set_sandbox
-    from core.tools.artifacts.store_artifact import StoreArtifactTool
-    from core.tools.artifacts.get_artifact import GetArtifactTool
-
-    sandbox_roots = []
-    for r in repos:
-        repo_path = _Path(settings.local_repos_dir) / \
-            str(feature.project_id) / str(r.id) / "repo"
-        if repo_path.exists():
-            sandbox_roots.append(str(repo_path))
-    # Also allow project-scoped artifacts
-    sandbox_roots.append(
-        str((_Path("./artifacts") / str(feature.project_id)).resolve()))
-    # Also allow flat artifacts dir (backward compat)
-    sandbox_roots.append(str(_Path("./artifacts").resolve()))
-    set_sandbox(sandbox_roots)
-
-    # Set artifact context for project-scoped storage
-    StoreArtifactTool.set_context(project_id=str(feature.project_id))
-    GetArtifactTool.set_context(project_id=str(feature.project_id))
-
-    # Load project-level custom skills
-    project = db.get(Project, feature.project_id)
-    project_custom_skills = (project.custom_skills or {}) if project else {}
+    project_custom_skills = _setup_agent_context(db, feature)
 
     # Run the core agent loop
     from core.orchestrator.loop import agent_loop
@@ -440,9 +443,8 @@ async def run_approval_agent(
     # Load rich multi-layered context (repos + architecture + knowledge + config)
     codebase_context = build_agent_context(db, feature)
 
-    # Load project-level custom skills
-    project = db.get(Project, feature.project_id)
-    project_custom_skills = (project.custom_skills or {}) if project else {}
+    # Shared setup: sandbox, artifact context, repo sync, search context
+    project_custom_skills = _setup_agent_context(db, feature)
 
     from core.orchestrator.loop import agent_loop
     result = await agent_loop(
@@ -451,7 +453,7 @@ async def run_approval_agent(
         skill_name=skill,
         codebase_context=codebase_context,
         conversation_history=history if history else None,
-        stop_on_text=False,  # Don't stop on text, we want the full artifact
+        stop_on_text=False,
         on_event=on_event,
         custom_skills=project_custom_skills,
         # Observability: group all turns for this feature into one Langfuse session
@@ -510,8 +512,8 @@ async def run_scaffold_agent(
     provider = get_provider(model_tier=model_tier)
     codebase_context = build_agent_context(db, feature)
 
-    project = db.get(Project, feature.project_id)
-    project_custom_skills = (project.custom_skills or {}) if project else {}
+    # Shared setup: sandbox, artifact context, repo sync, search context
+    project_custom_skills = _setup_agent_context(db, feature)
 
     from core.orchestrator.loop import agent_loop
     result = await agent_loop(

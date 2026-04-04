@@ -23,7 +23,7 @@ class ListDirectoryTool:
             return {"error": err}
         max_depth = arguments.get("max_depth", 2)
         if not path.exists() or not path.is_dir():
-            return {"error": f"Not a directory: {path}"}
+            return {"error": f"Not a directory: {path}. The repository may not be available locally. Use search_codebase for semantic search instead."}
 
         tree = []
         self._walk(path, tree, depth=0, max_depth=max_depth)

@@ -33,7 +33,7 @@ class ReadFileTool:
         if err:
             return {"error": err}
         if not path.exists():
-            return {"error": f"File not found: {path}"}
+            return {"error": f"File not found: {path}. The repository may not be available locally. Use search_codebase for semantic search or get_artifact for stored artifacts."}
         if not path.is_file():
             return {"error": f"Not a file: {path}"}
 
