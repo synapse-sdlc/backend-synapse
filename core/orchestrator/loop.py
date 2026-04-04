@@ -22,6 +22,7 @@ async def agent_loop(
     skill_name: str,
     codebase_context: str = "",
     max_turns: int = 30,
+    max_tokens: int = 16384,
     conversation_history: list = None,
     stop_on_text: bool = False,
     on_event: callable = None,
@@ -126,7 +127,7 @@ generate specs, create technical plans, and produce test cases.
                     system_prompt=system_prompt,
                     messages=messages,
                     tools=tool_definitions,
-                    max_tokens=16384,
+                    max_tokens=max_tokens,
                 )
 
                 # Langfuse: close generation with output + token usage
@@ -171,6 +172,20 @@ generate specs, create technical plans, and produce test cases.
             if response["tool_calls"]:
                 # Execute tools below (fall through to tool execution block)
                 pass
+            elif response["stop_reason"] == "max_tokens":
+                # Model hit the output token limit — prompt it to produce a shorter artifact
+                logger.warning(
+                    f"Turn {turn + 1}: max_tokens reached — prompting model to produce concise output")
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Your previous response was cut off because it exceeded the output token limit. "
+                        "Produce a more concise version and call store_artifact with the complete but "
+                        "shorter content. Reduce file contents to essential function signatures and "
+                        "TODO stubs only — no implementation prose."
+                    ),
+                })
+                continue
             elif response["stop_reason"] != "tool_use":
                 content = (response["content"] or "").strip()
 
@@ -318,11 +333,15 @@ generate specs, create technical plans, and produce test cases.
                                  "tool": tc["name"], "turn": turn + 1})
 
             validation_retry_needed = False
+            empty_content_retry = False
             for tool_call, result in zip(response["tool_calls"], results):
                 if tool_call["name"] == "store_artifact" and "error" in result:
                     logger.warning(
                         f"store_artifact validation error: {result['error']}")
                     validation_retry_needed = True
+                    # Detect the specific case of empty content
+                    if len(tool_call.get("arguments", {}).get("content", "")) < 10:
+                        empty_content_retry = True
                 if tool_call["name"] == "store_artifact" and "artifact_id" in result and on_event:
                     on_event({"type": "artifact_stored",
                              "artifact_id": result["artifact_id"], "turn": turn + 1})
@@ -334,10 +353,20 @@ generate specs, create technical plans, and produce test cases.
 
             # If store_artifact returned a validation error, tell the agent to fix and retry
             if validation_retry_needed and turn < max_turns - 1:
-                messages.append({
-                    "role": "user",
-                    "content": "Your artifact was rejected by validation. Check the error above and fix the issues, then call store_artifact again with corrected content.",
-                })
+                if empty_content_retry:
+                    retry_msg = (
+                        "The store_artifact call failed because the 'content' parameter was empty. "
+                        "You MUST write the complete artifact content directly inside the 'content' argument "
+                        "of the store_artifact tool call — do NOT leave it empty or reference content from "
+                        "your previous text. If the full content is too large, produce a concise but complete "
+                        "version. Call store_artifact again now with the actual content included."
+                    )
+                else:
+                    retry_msg = (
+                        "Your artifact was rejected by validation. Check the error above and fix the issues, "
+                        "then call store_artifact again with corrected content."
+                    )
+                messages.append({"role": "user", "content": retry_msg})
                 logger.info(
                     f"Turn {turn + 1}: validation retry — telling agent to fix artifact")
                 continue

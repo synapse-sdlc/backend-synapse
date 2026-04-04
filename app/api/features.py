@@ -61,7 +61,8 @@ def _check_agent_not_running(feature: Feature):
         from app.workers.celery_app import celery_app
         result = AsyncResult(feature.agent_task_id, app=celery_app)
         if result.state in ("PENDING", "STARTED", "RETRY"):
-            raise HTTPException(status_code=409, detail="Agent is already processing this feature. Please wait.")
+            raise HTTPException(
+                status_code=409, detail="Agent is already processing this feature. Please wait.")
         # Task completed/failed — stale ID, will be overwritten
 
 
@@ -81,7 +82,8 @@ def _try_auto_jira_export(db: Session, feature: Feature):
         if not config.get("auto_export_jira", True):
             return
         jira_config = db.execute(
-            select(JiraConfig).where(JiraConfig.project_id == feature.project_id)
+            select(JiraConfig).where(
+                JiraConfig.project_id == feature.project_id)
         ).scalars().first()
         if not jira_config:
             return
@@ -89,7 +91,8 @@ def _try_auto_jira_export(db: Session, feature: Feature):
         jira_export_task.delay(str(feature.id), None)
     except Exception as e:
         import logging
-        logging.getLogger(__name__).warning(f"Auto Jira export failed to queue: {e}")
+        logging.getLogger(__name__).warning(
+            f"Auto Jira export failed to queue: {e}")
 
 
 @router.post("/projects/{project_id}/features", response_model=FeatureResponse, status_code=201)
@@ -178,21 +181,25 @@ def approve_feature(
     }
 
     if phase not in phase_artifact_map:
-        raise HTTPException(status_code=400, detail=f"Cannot approve in phase: {phase}")
+        raise HTTPException(
+            status_code=400, detail=f"Cannot approve in phase: {phase}")
 
     artifact_type, artifact_id = phase_artifact_map[phase]
     if not artifact_id:
-        raise HTTPException(status_code=400, detail=f"No {artifact_type} artifact to approve")
+        raise HTTPException(
+            status_code=400, detail=f"No {artifact_type} artifact to approve")
 
     # Atomic phase transition — prevents concurrent duplicate approvals
-    next_phase = {"spec_review": "plan_review", "plan_review": "qa_review", "qa_review": "done"}
+    next_phase = {"spec_review": "plan_review",
+                  "plan_review": "qa_review", "qa_review": "done"}
     result = db.execute(
         update(Feature)
         .where(Feature.id == feature_id, Feature.phase == phase)
         .values(phase=next_phase[phase])
     )
     if result.rowcount == 0:
-        raise HTTPException(status_code=409, detail="Feature was already updated by another request")
+        raise HTTPException(
+            status_code=409, detail="Feature was already updated by another request")
 
     # Mark artifact as approved
     artifact = db.get(Artifact, artifact_id)
@@ -240,7 +247,8 @@ def reject_artifact(
     }
 
     if phase not in reject_map:
-        raise HTTPException(status_code=400, detail=f"Cannot reject in phase: {phase}")
+        raise HTTPException(
+            status_code=400, detail=f"Cannot reject in phase: {phase}")
 
     prev_phase, artifact_field, artifact_type = reject_map[phase]
 
@@ -339,7 +347,8 @@ def close_feature(
     feature = _verify_feature_access(db, feature_id, user)
 
     if feature.phase != "done":
-        raise HTTPException(status_code=400, detail="Can only close features in 'done' phase")
+        raise HTTPException(
+            status_code=400, detail="Can only close features in 'done' phase")
 
     feature.phase = "closed"
 
@@ -358,7 +367,8 @@ def close_feature(
         kb_update_task.delay(str(feature_id))
     except (ConnectionError, ImportError) as e:
         import logging
-        logging.getLogger(__name__).warning(f"KB update task failed to queue: {e}")
+        logging.getLogger(__name__).warning(
+            f"KB update task failed to queue: {e}")
 
     db.refresh(feature)
     return {"status": "closed", "phase": feature.phase, "feature_id": str(feature_id)}
@@ -416,19 +426,23 @@ def jira_preview(
     if feature.spec_artifact_id:
         spec_art = db.get(Artifact, feature.spec_artifact_id)
         if spec_art:
-            spec_data = spec_art.content if isinstance(spec_art.content, dict) else {}
+            spec_data = spec_art.content if isinstance(
+                spec_art.content, dict) else {}
 
     if feature.plan_artifact_id:
         plan_art = db.get(Artifact, feature.plan_artifact_id)
         if plan_art:
-            plan_data = plan_art.content if isinstance(plan_art.content, dict) else {}
+            plan_data = plan_art.content if isinstance(
+                plan_art.content, dict) else {}
 
     if feature.tests_artifact_id:
         tests_art = db.get(Artifact, feature.tests_artifact_id)
         if tests_art:
-            tests_data = tests_art.content if isinstance(tests_art.content, dict) else {}
+            tests_data = tests_art.content if isinstance(
+                tests_art.content, dict) else {}
 
-    feature_name = spec_data.get("feature_name") or plan_data.get("feature_name", feature.description)
+    feature_name = spec_data.get("feature_name") or plan_data.get(
+        "feature_name", feature.description)
     user_stories = spec_data.get("user_stories", [])
     subtasks = plan_data.get("subtasks", [])
     test_suites = tests_data.get("test_suites", [])
@@ -439,8 +453,10 @@ def jira_preview(
         except (TypeError, ValueError):
             return 0
 
-    total_hours = sum(safe_float(t.get("estimated_hours", 0)) for t in subtasks if isinstance(t, dict))
-    total_tests = sum(len(s.get("test_cases", s.get("tests", []))) for s in test_suites if isinstance(s, dict))
+    total_hours = sum(safe_float(t.get("estimated_hours", 0))
+                      for t in subtasks if isinstance(t, dict))
+    total_tests = sum(len(s.get("test_cases", s.get("tests", [])))
+                      for s in test_suites if isinstance(s, dict))
 
     return {
         "feature_name": feature_name,
@@ -471,13 +487,15 @@ def export_tests_csv(
         payload = decode_access_token(token)
         if payload:
             from app.deps import CurrentUser as CU
-            user = CU(id=UUID(payload["sub"]), org_id=UUID(payload["org_id"]), role=payload.get("role", "admin"), name=payload.get("name", ""))
+            user = CU(id=UUID(payload["sub"]), org_id=UUID(payload["org_id"]), role=payload.get(
+                "role", "admin"), name=payload.get("name", ""))
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     feature = _verify_feature_access(db, feature_id, user)
 
     if not feature.tests_artifact_id:
-        raise HTTPException(status_code=404, detail="No test cases generated yet")
+        raise HTTPException(
+            status_code=404, detail="No test cases generated yet")
 
     art = db.get(Artifact, feature.tests_artifact_id)
     if not art:
@@ -488,7 +506,8 @@ def export_tests_csv(
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Suite", "Type", "Story", "ID", "Title", "Priority", "Preconditions", "Steps", "Expected Result", "Automated"])
+    writer.writerow(["Suite", "Type", "Story", "ID", "Title", "Priority",
+                    "Preconditions", "Steps", "Expected Result", "Automated"])
 
     for suite in test_suites:
         if not isinstance(suite, dict):
@@ -500,8 +519,10 @@ def export_tests_csv(
         for tc in suite.get("test_cases", []):
             if not isinstance(tc, dict):
                 continue
-            preconditions = "; ".join(tc.get("preconditions", [])) if isinstance(tc.get("preconditions"), list) else str(tc.get("preconditions", ""))
-            steps = "; ".join(tc.get("steps", [])) if isinstance(tc.get("steps"), list) else str(tc.get("steps", ""))
+            preconditions = "; ".join(tc.get("preconditions", [])) if isinstance(
+                tc.get("preconditions"), list) else str(tc.get("preconditions", ""))
+            steps = "; ".join(tc.get("steps", [])) if isinstance(
+                tc.get("steps"), list) else str(tc.get("steps", ""))
 
             writer.writerow([
                 suite_name,
@@ -517,7 +538,8 @@ def export_tests_csv(
             ])
 
     output.seek(0)
-    feature_name = content.get("feature_name", feature.description)[:50].replace(" ", "_")
+    feature_name = content.get("feature_name", feature.description)[
+        :50].replace(" ", "_")
     filename = f"test_cases_{feature_name}.csv"
 
     return StreamingResponse(
@@ -536,9 +558,12 @@ def get_traceability_report(
     """Analyze traceability gaps across spec -> plan -> tests artifact chain."""
     feature = _verify_feature_access(db, feature_id, user)
 
-    spec = db.get(Artifact, feature.spec_artifact_id) if feature.spec_artifact_id else None
-    plan = db.get(Artifact, feature.plan_artifact_id) if feature.plan_artifact_id else None
-    tests = db.get(Artifact, feature.tests_artifact_id) if feature.tests_artifact_id else None
+    spec = db.get(
+        Artifact, feature.spec_artifact_id) if feature.spec_artifact_id else None
+    plan = db.get(
+        Artifact, feature.plan_artifact_id) if feature.plan_artifact_id else None
+    tests = db.get(
+        Artifact, feature.tests_artifact_id) if feature.tests_artifact_id else None
 
     if not all([spec, plan, tests]):
         missing = []
@@ -570,11 +595,10 @@ def generate_scaffold(
     feature = _verify_feature_access(db, feature_id, user)
 
     if not feature.plan_artifact_id:
-        raise HTTPException(status_code=400, detail="Plan artifact required — approve the spec first")
+        raise HTTPException(
+            status_code=400, detail="Plan artifact required — approve the spec first")
 
-    # Check no agent is running
-    if feature.agent_task_id:
-        raise HTTPException(status_code=409, detail="Agent is already running for this feature")
+    _check_agent_not_running(feature)
 
     model_tier = _resolve_model_tier(db, feature)
     from app.workers.tasks import scaffold_generation_task
@@ -598,15 +622,22 @@ def get_task_prompts(
     if not feature.plan_artifact_id:
         raise HTTPException(status_code=400, detail="Plan artifact required")
 
-    spec_a = db.get(Artifact, feature.spec_artifact_id) if feature.spec_artifact_id else None
+    spec_a = db.get(
+        Artifact, feature.spec_artifact_id) if feature.spec_artifact_id else None
     plan_a = db.get(Artifact, feature.plan_artifact_id)
-    tests_a = db.get(Artifact, feature.tests_artifact_id) if feature.tests_artifact_id else None
-    scaffold_a = db.get(Artifact, feature.scaffold_artifact_id) if feature.scaffold_artifact_id else None
+    tests_a = db.get(
+        Artifact, feature.tests_artifact_id) if feature.tests_artifact_id else None
+    scaffold_a = db.get(
+        Artifact, feature.scaffold_artifact_id) if feature.scaffold_artifact_id else None
 
-    spec_c = spec_a.content if spec_a and isinstance(spec_a.content, dict) else {}
-    plan_c = plan_a.content if plan_a and isinstance(plan_a.content, dict) else {}
-    tests_c = tests_a.content if tests_a and isinstance(tests_a.content, dict) else {}
-    scaffold_c = scaffold_a.content if scaffold_a and isinstance(scaffold_a.content, dict) else {}
+    spec_c = spec_a.content if spec_a and isinstance(
+        spec_a.content, dict) else {}
+    plan_c = plan_a.content if plan_a and isinstance(
+        plan_a.content, dict) else {}
+    tests_c = tests_a.content if tests_a and isinstance(
+        tests_a.content, dict) else {}
+    scaffold_c = scaffold_a.content if scaffold_a and isinstance(
+        scaffold_a.content, dict) else {}
 
     # Load knowledge entries
     from app.models.knowledge_entry import KnowledgeEntry
@@ -620,7 +651,8 @@ def get_task_prompts(
     # Get repo info
     from app.models.repository import Repository
     repo = db.execute(
-        select(Repository).where(Repository.project_id == feature.project_id).limit(1)
+        select(Repository).where(
+            Repository.project_id == feature.project_id).limit(1)
     ).scalars().first()
 
     from app.services.prompt_builder import build_all_task_prompts
@@ -650,24 +682,34 @@ def get_task_prompt(
     for p in result["prompts"]:
         if p["subtask_id"] == subtask_id:
             return p
-    raise HTTPException(status_code=404, detail=f"Subtask {subtask_id} not found")
+    raise HTTPException(
+        status_code=404, detail=f"Subtask {subtask_id} not found")
 
 
 def _load_export_data(db, feature):
     """Load all artifacts + knowledge + traceability for export."""
-    spec_a = db.get(Artifact, feature.spec_artifact_id) if feature.spec_artifact_id else None
-    plan_a = db.get(Artifact, feature.plan_artifact_id) if feature.plan_artifact_id else None
-    tests_a = db.get(Artifact, feature.tests_artifact_id) if feature.tests_artifact_id else None
-    scaffold_a = db.get(Artifact, feature.scaffold_artifact_id) if feature.scaffold_artifact_id else None
+    spec_a = db.get(
+        Artifact, feature.spec_artifact_id) if feature.spec_artifact_id else None
+    plan_a = db.get(
+        Artifact, feature.plan_artifact_id) if feature.plan_artifact_id else None
+    tests_a = db.get(
+        Artifact, feature.tests_artifact_id) if feature.tests_artifact_id else None
+    scaffold_a = db.get(
+        Artifact, feature.scaffold_artifact_id) if feature.scaffold_artifact_id else None
 
-    spec_c = spec_a.content if spec_a and isinstance(spec_a.content, dict) else {}
-    plan_c = plan_a.content if plan_a and isinstance(plan_a.content, dict) else {}
-    tests_c = tests_a.content if tests_a and isinstance(tests_a.content, dict) else {}
-    scaffold_c = scaffold_a.content if scaffold_a and isinstance(scaffold_a.content, dict) else {}
+    spec_c = spec_a.content if spec_a and isinstance(
+        spec_a.content, dict) else {}
+    plan_c = plan_a.content if plan_a and isinstance(
+        plan_a.content, dict) else {}
+    tests_c = tests_a.content if tests_a and isinstance(
+        tests_a.content, dict) else {}
+    scaffold_c = scaffold_a.content if scaffold_a and isinstance(
+        scaffold_a.content, dict) else {}
 
     from app.models.knowledge_entry import KnowledgeEntry
     kb_entries = db.execute(
-        select(KnowledgeEntry).where(KnowledgeEntry.project_id == feature.project_id).limit(50)
+        select(KnowledgeEntry).where(
+            KnowledgeEntry.project_id == feature.project_id).limit(50)
     ).scalars().all()
 
     trace = None
@@ -691,17 +733,21 @@ def export_xlsx(
         from app.utils.auth import decode_access_token
         payload = decode_access_token(token)
         if payload:
-            user = CurrentUser(id=UUID(payload["sub"]), org_id=UUID(payload["org_id"]), role=payload.get("role", "admin"), name=payload.get("name", ""))
+            user = CurrentUser(id=UUID(payload["sub"]), org_id=UUID(
+                payload["org_id"]), role=payload.get("role", "admin"), name=payload.get("name", ""))
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     feature = _verify_feature_access(db, feature_id, user)
-    spec_c, plan_c, tests_c, scaffold_c, kb_entries, trace = _load_export_data(db, feature)
+    spec_c, plan_c, tests_c, scaffold_c, kb_entries, trace = _load_export_data(
+        db, feature)
 
     from app.services.export_service import export_feature_xlsx
-    xlsx_bytes = export_feature_xlsx(feature, spec_c, plan_c, tests_c, scaffold_c, kb_entries, trace)
+    xlsx_bytes = export_feature_xlsx(
+        feature, spec_c, plan_c, tests_c, scaffold_c, kb_entries, trace)
 
-    fname = (spec_c.get("feature_name") or feature.description or "feature")[:40].replace(" ", "_")
+    fname = (spec_c.get("feature_name") or feature.description or "feature")[
+        :40].replace(" ", "_")
     return StreamingResponse(
         iter([xlsx_bytes]),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -721,17 +767,21 @@ def export_markdown(
         from app.utils.auth import decode_access_token
         payload = decode_access_token(token)
         if payload:
-            user = CurrentUser(id=UUID(payload["sub"]), org_id=UUID(payload["org_id"]), role=payload.get("role", "admin"), name=payload.get("name", ""))
+            user = CurrentUser(id=UUID(payload["sub"]), org_id=UUID(
+                payload["org_id"]), role=payload.get("role", "admin"), name=payload.get("name", ""))
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     feature = _verify_feature_access(db, feature_id, user)
-    spec_c, plan_c, tests_c, scaffold_c, kb_entries, trace = _load_export_data(db, feature)
+    spec_c, plan_c, tests_c, scaffold_c, kb_entries, trace = _load_export_data(
+        db, feature)
 
     from app.services.export_service import export_feature_markdown
-    md = export_feature_markdown(feature, spec_c, plan_c, tests_c, scaffold_c, kb_entries, trace)
+    md = export_feature_markdown(
+        feature, spec_c, plan_c, tests_c, scaffold_c, kb_entries, trace)
 
-    fname = (spec_c.get("feature_name") or feature.description or "feature")[:40].replace(" ", "_")
+    fname = (spec_c.get("feature_name") or feature.description or "feature")[
+        :40].replace(" ", "_")
     return StreamingResponse(
         iter([md]),
         media_type="text/markdown",

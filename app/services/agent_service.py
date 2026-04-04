@@ -166,7 +166,8 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
             # Check what type of artifact was stored by reading from filesystem
             # (the core tool writes to ./artifacts/)
             # Check project-scoped dir first, flat fallback
-            artifact_path = Path("./artifacts") / str(feature.project_id) / f"{aid}.json"
+            artifact_path = Path("./artifacts") / \
+                str(feature.project_id) / f"{aid}.json"
             if not artifact_path.exists():
                 artifact_path = Path("./artifacts") / f"{aid}.json"
             if not artifact_path.exists():
@@ -191,7 +192,8 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
             if existing and new_version > 1 and existing.version < new_version:
                 import hashlib as _hl
                 from datetime import datetime as _dt
-                snapshot_id = _hl.sha256(f"{aid}:v{existing.version}:{_dt.now().isoformat()}".encode()).hexdigest()[:12]
+                snapshot_id = _hl.sha256(
+                    f"{aid}:v{existing.version}:{_dt.now().isoformat()}".encode()).hexdigest()[:12]
                 snapshot = Artifact(
                     id=snapshot_id,
                     type=existing.type,
@@ -315,16 +317,19 @@ async def run_agent_turn(
         select(Repository).where(Repository.project_id == feature.project_id)
     ).scalars().all()
     repo_ids = [str(r.id) for r in repos]
-    SearchCodebaseTool.set_context(project_id=str(feature.project_id), repo_ids=repo_ids)
+    SearchCodebaseTool.set_context(project_id=str(
+        feature.project_id), repo_ids=repo_ids)
 
     # Ensure repos are on local disk (sync from S3 if missing after restart/deploy)
     from pathlib import Path as _Path
     for r in repos:
-        repo_path = _Path(settings.local_repos_dir) / str(feature.project_id) / str(r.id) / "repo"
+        repo_path = _Path(settings.local_repos_dir) / \
+            str(feature.project_id) / str(r.id) / "repo"
         if not repo_path.exists() and r.s3_repo_key:
             try:
                 from app.services.project_service import download_repo_from_s3
-                download_repo_from_s3(str(feature.project_id), r.s3_repo_key, str(r.id))
+                download_repo_from_s3(
+                    str(feature.project_id), r.s3_repo_key, str(r.id))
                 logger.info(f"Synced repo {r.name} from S3 for agent access")
             except Exception as e:
                 logger.warning(f"Failed to sync repo {r.name} from S3: {e}")
@@ -336,11 +341,13 @@ async def run_agent_turn(
 
     sandbox_roots = []
     for r in repos:
-        repo_path = _Path(settings.local_repos_dir) / str(feature.project_id) / str(r.id) / "repo"
+        repo_path = _Path(settings.local_repos_dir) / \
+            str(feature.project_id) / str(r.id) / "repo"
         if repo_path.exists():
             sandbox_roots.append(str(repo_path))
     # Also allow project-scoped artifacts
-    sandbox_roots.append(str((_Path("./artifacts") / str(feature.project_id)).resolve()))
+    sandbox_roots.append(
+        str((_Path("./artifacts") / str(feature.project_id)).resolve()))
     # Also allow flat artifacts dir (backward compat)
     sandbox_roots.append(str(_Path("./artifacts").resolve()))
     set_sandbox(sandbox_roots)
@@ -491,8 +498,10 @@ async def run_scaffold_agent(
         parts.append(f"Spec artifact ID: {feature.spec_artifact_id}")
     if feature.tests_artifact_id:
         parts.append(f"Tests artifact ID: {feature.tests_artifact_id}")
-    parts.append(f"Read all artifacts using get_artifact, then follow the code-scaffold skill instructions.")
-    parts.append(f"Store the scaffold using store_artifact with type='scaffold' and parent_id='{feature.plan_artifact_id}'.")
+    parts.append(
+        f"Read all artifacts using get_artifact, then follow the code-scaffold skill instructions.")
+    parts.append(
+        f"Store the scaffold using store_artifact with type='scaffold' and parent_id='{feature.plan_artifact_id}'.")
     msg = "\n".join(parts)
 
     history = load_conversation_history(db, str(feature_id))
@@ -510,6 +519,7 @@ async def run_scaffold_agent(
         user_message=msg,
         skill_name="code-scaffold",
         codebase_context=codebase_context,
+        max_tokens=32768,
         conversation_history=history if history else None,
         stop_on_text=False,
         on_event=on_event,

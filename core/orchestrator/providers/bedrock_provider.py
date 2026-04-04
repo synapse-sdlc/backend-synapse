@@ -95,7 +95,7 @@ class BedrockProvider(LLMProvider):
         return {
             "content": content_text,
             "tool_calls": tool_calls,
-            "stop_reason": "tool_use" if stop == "tool_use" else "end_turn",
+            "stop_reason": "tool_use" if stop == "tool_use" else ("max_tokens" if stop == "max_tokens" else "end_turn"),
             "usage": usage,
         }
 
