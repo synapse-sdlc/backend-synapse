@@ -1,5 +1,6 @@
 from uuid import UUID
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -22,8 +23,8 @@ class ExtensionTokenSave(BaseModel):
 class ExtensionConfigResponse(BaseModel):
     project_id: UUID
     configured: bool
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 def _verify_project(db: Session, project_id: UUID, user: CurrentUser) -> Project:
