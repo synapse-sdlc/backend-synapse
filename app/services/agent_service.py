@@ -317,8 +317,19 @@ async def run_agent_turn(
     repo_ids = [str(r.id) for r in repos]
     SearchCodebaseTool.set_context(project_id=str(feature.project_id), repo_ids=repo_ids)
 
-    # Set file tool sandbox — restrict to user's repos only
+    # Ensure repos are on local disk (sync from S3 if missing after restart/deploy)
     from pathlib import Path as _Path
+    for r in repos:
+        repo_path = _Path(settings.local_repos_dir) / str(feature.project_id) / str(r.id) / "repo"
+        if not repo_path.exists() and r.s3_repo_key:
+            try:
+                from app.services.project_service import download_repo_from_s3
+                download_repo_from_s3(str(feature.project_id), r.s3_repo_key, str(r.id))
+                logger.info(f"Synced repo {r.name} from S3 for agent access")
+            except Exception as e:
+                logger.warning(f"Failed to sync repo {r.name} from S3: {e}")
+
+    # Set file tool sandbox — restrict to user's repos only
     from core.tools.sandbox import set_sandbox
     from core.tools.artifacts.store_artifact import StoreArtifactTool
     from core.tools.artifacts.get_artifact import GetArtifactTool
