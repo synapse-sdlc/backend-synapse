@@ -282,10 +282,10 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
     return None
 
 
-def _setup_agent_context(db: Session, feature: Feature) -> dict:
+def _setup_agent_context(db: Session, feature: Feature) -> tuple:
     """Shared setup for all agent runs: sandbox, artifact context, repo sync, search context.
 
-    Returns project_custom_skills dict.
+    Returns (project_custom_skills dict, project object).
     """
     from pathlib import Path as _Path
     from core.tools.codebase.search_codebase import SearchCodebaseTool
@@ -329,7 +329,8 @@ def _setup_agent_context(db: Session, feature: Feature) -> dict:
 
     # Project custom skills
     project = db.get(Project, feature.project_id)
-    return (project.custom_skills or {}) if project else {}
+    custom_skills = (project.custom_skills or {}) if project else {}
+    return custom_skills, project
 
 
 async def run_agent_turn(
@@ -361,7 +362,7 @@ async def run_agent_turn(
     # Load rich multi-layered context (repos + architecture + knowledge + config)
     codebase_context = build_agent_context(db, feature)
 
-    project_custom_skills = _setup_agent_context(db, feature)
+    project_custom_skills, _project = _setup_agent_context(db, feature)
 
     # Run the core agent loop
     from core.orchestrator.loop import agent_loop
@@ -376,7 +377,7 @@ async def run_agent_turn(
         custom_skills=project_custom_skills,
         # Observability: group all turns for this feature into one Langfuse session
         trace_session_id=str(feature_id),
-        trace_user_id=str(project.org_id) if project else None,
+        trace_user_id=str(_project.org_id) if _project else None,
         trace_metadata={
             "feature_id": str(feature_id),
             "project_id": str(feature.project_id),
@@ -444,7 +445,7 @@ async def run_approval_agent(
     codebase_context = build_agent_context(db, feature)
 
     # Shared setup: sandbox, artifact context, repo sync, search context
-    project_custom_skills = _setup_agent_context(db, feature)
+    project_custom_skills, _project = _setup_agent_context(db, feature)
 
     from core.orchestrator.loop import agent_loop
     result = await agent_loop(
@@ -458,7 +459,7 @@ async def run_approval_agent(
         custom_skills=project_custom_skills,
         # Observability: group all turns for this feature into one Langfuse session
         trace_session_id=str(feature_id),
-        trace_user_id=str(project.org_id) if project else None,
+        trace_user_id=str(_project.org_id) if _project else None,
         trace_metadata={
             "feature_id": str(feature_id),
             "project_id": str(feature.project_id),
@@ -513,7 +514,7 @@ async def run_scaffold_agent(
     codebase_context = build_agent_context(db, feature)
 
     # Shared setup: sandbox, artifact context, repo sync, search context
-    project_custom_skills = _setup_agent_context(db, feature)
+    project_custom_skills, _project = _setup_agent_context(db, feature)
 
     from core.orchestrator.loop import agent_loop
     result = await agent_loop(
