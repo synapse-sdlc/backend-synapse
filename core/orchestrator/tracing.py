@@ -1,26 +1,13 @@
 """
-Langfuse v4 observability integration for Synapse.
+Langfuse v2 observability integration for Synapse.
 
-v4 API overview:
-  - No client.trace() method. The root observation IS the trace.
-  - client.start_observation(name, as_type="span"|"generation", ...) → span/gen object
-  - Child observations use trace_context={"trace_id": parent.trace_id}
-  - span.update(output=..., usage_details={"input": N, "output": N})
-  - span.end()
+v2 API:
+  - client.trace(name, session_id, user_id, input, metadata, tags) → trace
+  - trace.generation(name, model, input, metadata) → generation
+  - generation.end(output, usage)  # usage: {prompt_tokens, completion_tokens, total_tokens}
+  - trace.span(name, input, metadata) → span
+  - span.end(output)
   - client.flush()
-
-Usage in loop.py:
-    from core.orchestrator.tracing import start_trace, flush
-
-    trace = start_trace("agent-loop:spec-drafting", session_id=..., user_id=..., input=...)
-    gen = trace.start_generation("llm-turn-1", model="claude", input=[...])
-    gen.end(output={...}, usage={"input": 100, "output": 50})
-    tool_span = trace.start_span("tool:read_file", input={...})
-    tool_span.end(output={...})
-    trace.end(output={...})
-    flush()
-
-All functions are no-ops when keys are not configured.
 """
 
 import logging
@@ -32,14 +19,12 @@ logger = logging.getLogger("synapse.tracing")
 _client = None
 _init_done = False
 
-# Single background flusher — reused across calls to avoid thread-per-flush
 _flush_event = threading.Event()
 _flush_thread: Optional[threading.Thread] = None
 _flush_lock = threading.Lock()
 
 
 def _get_client():
-    """Lazy-init the Langfuse v4 client; returns None when not configured."""
     global _client, _init_done
     if _init_done:
         return _client
@@ -63,17 +48,14 @@ def _get_client():
         _init_done = True
     except Exception as exc:
         logger.warning("Langfuse init failed — tracing disabled: %s", exc)
-        # Don't set _init_done so next call retries
     return _client
 
 
 # ---------------------------------------------------------------------------
-# No-op stubs — absorb all calls when Langfuse is disabled
+# No-op stubs
 # ---------------------------------------------------------------------------
 
 class _NoopSpan:
-    """Stub returned when Langfuse is disabled or an operation fails."""
-
     trace_id: Optional[str] = None
 
     def start_generation(self, *_, **__) -> "_NoopSpan":
@@ -93,24 +75,18 @@ _NOOP = _NoopSpan()
 
 
 # ---------------------------------------------------------------------------
-# TraceHandle — wraps the root observation and exposes child helpers
+# TraceHandle
 # ---------------------------------------------------------------------------
 
 class TraceHandle:
-    """
-    Wraps a root Langfuse v4 observation (the trace root span).
-    Exposes helper methods to create child generations and spans that are
-    automatically linked to this trace via trace_context.
-    """
-
-    def __init__(self, root_span, client):
-        self._root = root_span
+    def __init__(self, trace, client):
+        self._trace = trace
         self._client = client
 
     @property
     def trace_id(self) -> Optional[str]:
         try:
-            return self._root.trace_id
+            return self._trace.id
         except Exception:
             return None
 
@@ -122,20 +98,16 @@ class TraceHandle:
         input: Optional[Any] = None,
         metadata: Optional[dict] = None,
     ) -> "_GenHandle":
-        """Open a generation child span (LLM call)."""
         try:
-            tid = self.trace_id
-            kwargs: dict[str, Any] = {"name": name, "as_type": "generation"}
-            if tid:
-                kwargs["trace_context"] = {"trace_id": tid}
+            kwargs: dict[str, Any] = {"name": name}
             if model:
                 kwargs["model"] = model
             if input is not None:
                 kwargs["input"] = input
             if metadata:
                 kwargs["metadata"] = metadata
-            span = self._client.start_observation(**kwargs)
-            return _GenHandle(span)
+            gen = self._trace.generation(**kwargs)
+            return _GenHandle(gen)
         except Exception as exc:
             logger.warning("Failed to start generation span: %s", exc)
             return _NOOP  # type: ignore[return-value]
@@ -147,24 +119,19 @@ class TraceHandle:
         input: Optional[Any] = None,
         metadata: Optional[dict] = None,
     ) -> "_SpanHandle":
-        """Open a generic child span (tool call, etc.)."""
         try:
-            tid = self.trace_id
-            kwargs: dict[str, Any] = {"name": name, "as_type": "span"}
-            if tid:
-                kwargs["trace_context"] = {"trace_id": tid}
+            kwargs: dict[str, Any] = {"name": name}
             if input is not None:
                 kwargs["input"] = input
             if metadata:
                 kwargs["metadata"] = metadata
-            span = self._client.start_observation(**kwargs)
+            span = self._trace.span(**kwargs)
             return _SpanHandle(span)
         except Exception as exc:
             logger.warning("Failed to start tool span: %s", exc)
             return _NOOP  # type: ignore[return-value]
 
     def update(self, *, output: Optional[Any] = None, metadata: Optional[dict] = None):
-        """Update root trace output/metadata."""
         try:
             kwargs: dict[str, Any] = {}
             if output is not None:
@@ -172,59 +139,45 @@ class TraceHandle:
             if metadata:
                 kwargs["metadata"] = metadata
             if kwargs:
-                self._root.update(**kwargs)
+                self._trace.update(**kwargs)
         except Exception as exc:
             logger.warning("Failed to update trace: %s", exc)
 
     def end(self, *, output: Optional[Any] = None):
-        """Close the root trace span."""
         try:
             if output is not None:
-                self._root.update(output=output)
-            self._root.end()
+                self._trace.update(output=output)
         except Exception as exc:
             logger.warning("Failed to end trace: %s", exc)
 
 
 class _GenHandle:
-    """Wraps a Langfuse generation observation."""
-
-    def __init__(self, span):
-        self._span = span
+    def __init__(self, gen):
+        self._gen = gen
 
     def end(self, *, output: Optional[Any] = None, usage: Optional[dict] = None):
-        """
-        Close the generation span.
-        usage dict: {"input": N, "output": N}  (token counts)
-        """
         try:
             kwargs: dict[str, Any] = {}
             if output is not None:
                 kwargs["output"] = output
             if usage:
-                # v4 expects usage_details={"input": N, "output": N}
-                kwargs["usage_details"] = {
-                    "input": usage.get("input", 0),
-                    "output": usage.get("output", 0),
+                kwargs["usage"] = {
+                    "prompt_tokens": usage.get("input", 0),
+                    "completion_tokens": usage.get("output", 0),
+                    "total_tokens": usage.get("input", 0) + usage.get("output", 0),
                 }
-            if kwargs:
-                self._span.update(**kwargs)
-            self._span.end()
+            self._gen.end(**kwargs)
         except Exception as exc:
             logger.warning("Failed to end generation span: %s", exc)
 
 
 class _SpanHandle:
-    """Wraps a Langfuse generic observation."""
-
     def __init__(self, span):
         self._span = span
 
     def end(self, *, output: Optional[Any] = None):
         try:
-            if output is not None:
-                self._span.update(output=output)
-            self._span.end()
+            self._span.end(output=output)
         except Exception as exc:
             logger.warning("Failed to end span: %s", exc)
 
@@ -242,42 +195,29 @@ def start_trace(
     metadata: Optional[dict] = None,
     tags: Optional[list] = None,
 ) -> TraceHandle:
-    """
-    Create a root Langfuse trace (top-level observation).
-    Returns a TraceHandle or a no-op stub when Langfuse is disabled.
-    session_id, user_id, and tags are stored in metadata since v4
-    doesn't have dedicated top-level fields for them on observations.
-    """
     client = _get_client()
     if client is None:
         return _NOOP  # type: ignore[return-value]
     try:
-        _meta: dict[str, Any] = dict(metadata or {})
+        kwargs: dict[str, Any] = {"name": name}
         if session_id:
-            _meta["session_id"] = session_id
+            kwargs["session_id"] = session_id
         if user_id:
-            _meta["user_id"] = user_id
-        if tags:
-            _meta["tags"] = tags
-        kwargs: dict[str, Any] = {"name": name, "as_type": "span"}
+            kwargs["user_id"] = user_id
         if input is not None:
             kwargs["input"] = input
-        if _meta:
-            kwargs["metadata"] = _meta
-        root = client.start_observation(**kwargs)
-        return TraceHandle(root, client)
+        if metadata:
+            kwargs["metadata"] = metadata
+        if tags:
+            kwargs["tags"] = tags
+        trace = client.trace(**kwargs)
+        return TraceHandle(trace, client)
     except Exception as exc:
         logger.warning("Failed to create Langfuse trace: %s", exc)
         return _NOOP  # type: ignore[return-value]
 
 
 def flush(blocking: bool = False):
-    """Flush all buffered Langfuse events to the server.
-
-    Non-blocking by default (signals a single background daemon thread)
-    so it doesn't hold up the agent loop between turns.
-    Use blocking=True at process/task shutdown so nothing is lost.
-    """
     client = _get_client()
     if client is None:
         return
@@ -292,7 +232,6 @@ def flush(blocking: bool = False):
 
 
 def _ensure_flush_thread(client):
-    """Start the single background flush thread if it isn't running."""
     global _flush_thread
     with _flush_lock:
         if _flush_thread is not None and _flush_thread.is_alive():
@@ -303,7 +242,6 @@ def _ensure_flush_thread(client):
 
 
 def _flush_loop(client):
-    """Background loop: wait for signal, then flush."""
     while True:
         _flush_event.wait()
         _flush_event.clear()

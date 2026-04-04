@@ -485,8 +485,8 @@ def export_tests_csv(
     from app.deps import get_optional_user as _  # noqa
     # If no auth header (browser download), try query param token
     if not user and token:
-        from app.utils.auth import decode_access_token
-        payload = decode_access_token(token)
+        from app.deps import _resolve_token
+        payload = _resolve_token(token, db)
         if payload:
             from app.deps import CurrentUser as CU
             user = CU(id=UUID(payload["sub"]), org_id=UUID(payload["org_id"]), role=payload.get(
@@ -732,8 +732,8 @@ def export_xlsx(
 ):
     """Export feature as multi-sheet Excel workbook."""
     if not user and token:
-        from app.utils.auth import decode_access_token
-        payload = decode_access_token(token)
+        from app.deps import _resolve_token
+        payload = _resolve_token(token, db)
         if payload:
             user = CurrentUser(id=UUID(payload["sub"]), org_id=UUID(
                 payload["org_id"]), role=payload.get("role", "admin"), name=payload.get("name", ""))
@@ -766,8 +766,8 @@ def export_markdown(
 ):
     """Export feature as full markdown document."""
     if not user and token:
-        from app.utils.auth import decode_access_token
-        payload = decode_access_token(token)
+        from app.deps import _resolve_token
+        payload = _resolve_token(token, db)
         if payload:
             user = CurrentUser(id=UUID(payload["sub"]), org_id=UUID(
                 payload["org_id"]), role=payload.get("role", "admin"), name=payload.get("name", ""))

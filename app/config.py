@@ -63,6 +63,7 @@ class Settings(BaseSettings):
 
     # Bedrock Guardrails (optional — set to enable content filtering)
     bedrock_guardrail_id: str = ""
+    bedrock_guardrail_arn: str = ""
     bedrock_guardrail_version: str = "DRAFT"
 
     # Cognito (optional — when set, Cognito JWTs are accepted alongside local JWTs)

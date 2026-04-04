@@ -62,8 +62,8 @@ class BedrockProvider(LLMProvider):
         # Attach guardrail if configured
         if self.guardrail_id:
             request_body["guardrailConfig"] = {
-                "guardrailIdentifier": self.guardrail_id,
-                "guardrailVersion": self.guardrail_version,
+                "guardrailIdentifier": str(self.guardrail_id),
+                "guardrailVersion": str(self.guardrail_version),
             }
 
         if self.bearer_token:
@@ -101,6 +101,14 @@ class BedrockProvider(LLMProvider):
 
     def _call_with_boto3(self, request_body):
         """Standard boto3 call with IAM credentials (SigV4 signing)."""
+        import logging
+        _log = logging.getLogger(__name__)
+        _log.info(
+            "Bedrock converse: model=%s, region=%s, guardrail_id=%s, guardrail_version=%s",
+            request_body["modelId"], self.region,
+            request_body.get("guardrailConfig", {}).get("guardrailIdentifier", "none"),
+            request_body.get("guardrailConfig", {}).get("guardrailVersion", "none"),
+        )
         kwargs = {
             "modelId": request_body["modelId"],
             "system": request_body["system"],

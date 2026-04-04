@@ -24,13 +24,18 @@ class CurrentUser:
     name: str = ""
 
 
-def _resolve_token(token: str) -> Optional[dict]:
-    """Try Cognito verification first, fall back to local JWT."""
+def _resolve_token(token: str, db: Session = None) -> Optional[dict]:
+    """Try Cognito verification first, fall back to local JWT.
+    When db is provided, resolves the real org_id from the database.
+    """
     from app.config import settings
     if settings.cognito_user_pool_id:
         cognito_payload = verify_cognito_token(token)
         if cognito_payload:
-            return cognito_claims_to_user_dict(cognito_payload)
+            user_dict = cognito_claims_to_user_dict(cognito_payload)
+            if user_dict and db:
+                return _provision_cognito_user(user_dict, db)
+            return user_dict
     return decode_access_token(token)
 
 
