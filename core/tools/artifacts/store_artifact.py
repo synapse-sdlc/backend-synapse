@@ -108,12 +108,11 @@ class StoreArtifactTool:
                 f"---\n\n```json\n{art_content}\n```\n"
             )
 
-        # Sync to S3 (fire-and-forget — never block the response)
+        # Sync to S3 (fire-and-forget in background thread — never block)
         s3_synced = "pending"
         try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            loop.run_in_executor(None, _upload_to_s3, artifact_id, json_path)
+            import threading
+            threading.Thread(target=_upload_to_s3, args=(artifact_id, json_path), daemon=True).start()
         except Exception as e:
             s3_synced = False
             logging.getLogger("synapse.tools").warning(f"S3 upload schedule failed (non-fatal): {e}")

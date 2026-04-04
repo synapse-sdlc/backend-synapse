@@ -113,7 +113,7 @@ def _update_feature_metrics(session, feature_id, result, task_start):
 
 
 @celery_app.task(bind=True, name="app.workers.tasks.agent_run_task", time_limit=600, max_retries=1)
-def agent_run_task(self, feature_id: str, user_message: str):
+def agent_run_task(self, feature_id: str, user_message: str, model_tier: str = "balanced"):
     """Run a single agent turn for a feature conversation."""
     session = _get_sync_session()
     lock = None
@@ -144,6 +144,7 @@ def agent_run_task(self, feature_id: str, user_message: str):
             user_message=user_message,
             db=session,
             on_event=on_event,
+            model_tier=model_tier,
         ))
 
         # Track cost/time metrics on feature
@@ -182,7 +183,7 @@ def agent_run_task(self, feature_id: str, user_message: str):
 
 
 @celery_app.task(bind=True, name="app.workers.tasks.approval_agent_task", time_limit=600, max_retries=1)
-def approval_agent_task(self, feature_id: str):
+def approval_agent_task(self, feature_id: str, model_tier: str = "balanced"):
     """Run the next agent after an approval (plan or QA generation)."""
     session = _get_sync_session()
     lock = None
@@ -211,6 +212,7 @@ def approval_agent_task(self, feature_id: str):
             feature_id=feature_id,
             db=session,
             on_event=on_event,
+            model_tier=model_tier,
         ))
 
         # Track cost/time metrics on feature
@@ -247,7 +249,7 @@ def approval_agent_task(self, feature_id: str):
 
 
 @celery_app.task(bind=True, name="app.workers.tasks.scaffold_generation_task", time_limit=600, max_retries=1)
-def scaffold_generation_task(self, feature_id: str):
+def scaffold_generation_task(self, feature_id: str, model_tier: str = "balanced"):
     """Generate code scaffolds from approved plan + spec + tests."""
     session = _get_sync_session()
     lock = None
@@ -275,6 +277,7 @@ def scaffold_generation_task(self, feature_id: str):
             feature_id=feature_id,
             db=session,
             on_event=on_event,
+            model_tier=model_tier,
         ))
 
         _update_feature_metrics(session, feature_id, result, task_start)

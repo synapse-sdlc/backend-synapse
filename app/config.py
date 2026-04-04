@@ -59,15 +59,60 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-def get_provider():
-    if settings.synapse_provider == "ollama":
+MODEL_TIERS = {
+    "bedrock": {
+        "fast": {
+            "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "label": "Fast",
+            "description": "Quick drafts and simple tasks (~3x faster)",
+            "speed": "~200 tok/s",
+            "icon": "zap",
+        },
+        "balanced": {
+            "model_id": "us.anthropic.claude-sonnet-4-6",
+            "label": "Balanced",
+            "description": "Best for most tasks (recommended)",
+            "speed": "~70 tok/s",
+            "icon": "star",
+        },
+        "powerful": {
+            "model_id": "us.anthropic.claude-opus-4-6",
+            "label": "Powerful",
+            "description": "Complex features, large codebases",
+            "speed": "~30 tok/s",
+            "icon": "diamond",
+        },
+    },
+    "ollama": {
+        "fast": {"model_id": "qwen3:8b", "label": "Fast", "description": "Quick local inference", "speed": "Fast", "icon": "zap"},
+        "balanced": {"model_id": "qwen3:8b", "label": "Balanced", "description": "Default local model", "speed": "Medium", "icon": "star"},
+        "powerful": {"model_id": "qwen3:32b", "label": "Powerful", "description": "Higher quality, slower", "speed": "Slow", "icon": "diamond"},
+    },
+}
+
+
+def get_provider(model_tier=None):
+    provider_name = settings.synapse_provider
+    tier = model_tier or "balanced"
+    tier_config = MODEL_TIERS.get(provider_name, {}).get(tier)
+
+    if provider_name == "ollama":
         from core.orchestrator.providers.ollama_provider import OllamaProvider
-        return OllamaProvider(model=settings.synapse_model)
-    elif settings.synapse_provider == "bedrock":
+        model = tier_config["model_id"] if tier_config else settings.synapse_model
+        return OllamaProvider(model=model)
+    elif provider_name == "bedrock":
         from core.orchestrator.providers.bedrock_provider import BedrockProvider
+        model = tier_config["model_id"] if tier_config else settings.synapse_bedrock_model
         return BedrockProvider(
-            model=settings.synapse_bedrock_model,
+            model=model,
             bearer_token=settings.aws_bearer_token_bedrock or None,
+            region=settings.aws_default_region,
         )
     else:
-        raise ValueError(f"Unknown provider: {settings.synapse_provider}")
+        raise ValueError(f"Unknown provider: {provider_name}. Set SYNAPSE_PROVIDER to 'ollama' or 'bedrock'.")
+
+
+def get_available_tiers():
+    """Return tier metadata for frontend display."""
+    tiers = MODEL_TIERS.get(settings.synapse_provider, {})
+    return [{"tier": k, **{kk: vv for kk, vv in v.items() if kk != "model_id"}} for k, v in tiers.items()]

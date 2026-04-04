@@ -277,6 +277,7 @@ async def run_agent_turn(
     user_message: str,
     db: Session,
     on_event: callable = None,
+    model_tier: str = "balanced",
 ) -> dict:
     """Run a single agent turn for a feature conversation.
 
@@ -295,7 +296,7 @@ async def run_agent_turn(
     stop_on_text = feature.phase in CONVERSATIONAL_PHASES
 
     # Get provider (Ollama or Bedrock)
-    provider = get_provider()
+    provider = get_provider(model_tier=model_tier)
 
     # Load rich multi-layered context (repos + architecture + knowledge + config)
     codebase_context = build_agent_context(db, feature)
@@ -344,6 +345,7 @@ async def run_approval_agent(
     feature_id: str,
     db: Session,
     on_event: callable = None,
+    model_tier: str = "balanced",
 ) -> dict:
     """Run the next agent after an approval (plan generation or QA test generation).
 
@@ -378,7 +380,7 @@ async def run_approval_agent(
     history = load_conversation_history(db, str(feature_id))
     old_count = len(history)
 
-    provider = get_provider()
+    provider = get_provider(model_tier=model_tier)
 
     # Load rich multi-layered context (repos + architecture + knowledge + config)
     codebase_context = build_agent_context(db, feature)
@@ -413,6 +415,7 @@ async def run_approval_agent(
 async def run_scaffold_agent(
     feature_id: str,
     db: Session,
+    model_tier: str = "balanced",
     on_event: callable = None,
 ) -> dict:
     """Generate code scaffolds from the approved plan, spec, and tests."""
@@ -437,7 +440,7 @@ async def run_scaffold_agent(
     history = load_conversation_history(db, str(feature_id))
     old_count = len(history)
 
-    provider = get_provider()
+    provider = get_provider(model_tier=model_tier)
     codebase_context = build_agent_context(db, feature)
 
     project = db.get(Project, feature.project_id)

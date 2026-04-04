@@ -44,6 +44,16 @@ def _verify_project_access(db: Session, project_id: UUID, user: CurrentUser) -> 
     return project
 
 
+def _resolve_model_tier(db: Session, feature: Feature) -> str:
+    """Get model tier from project config, defaulting to 'balanced'."""
+    valid_tiers = {"fast", "balanced", "powerful"}
+    project = db.get(Project, feature.project_id)
+    if project and project.config:
+        tier = project.config.get("model_tier", "balanced")
+        return tier if tier in valid_tiers else "balanced"
+    return "balanced"
+
+
 def _check_agent_not_running(feature: Feature):
     """Check if an agent task is already running for this feature. Raises 409 if so."""
     if feature.agent_task_id:
@@ -142,8 +152,9 @@ def send_message(
     db.add(db_msg)
     db.commit()
 
+    model_tier = _resolve_model_tier(db, feature)
     from app.workers.tasks import agent_run_task
-    task = agent_run_task.delay(str(feature_id), body.content)
+    task = agent_run_task.delay(str(feature_id), body.content, model_tier)
     _record_task_id(db, feature, task.id)
 
     return {"status": "accepted", "feature_id": str(feature_id)}
@@ -200,7 +211,8 @@ def approve_feature(
 
     # Trigger next agent (except when moving to done)
     if next_phase[phase] != "done":
-        task = approval_agent_task.delay(str(feature_id))
+        model_tier = _resolve_model_tier(db, feature)
+        task = approval_agent_task.delay(str(feature_id), model_tier)
         _record_task_id(db, feature, task.id)
     else:
         # Phase just moved to "done" — auto-export to Jira if configured
@@ -510,8 +522,9 @@ def generate_scaffold(
     if feature.agent_task_id:
         raise HTTPException(status_code=409, detail="Agent is already running for this feature")
 
+    model_tier = _resolve_model_tier(db, feature)
     from app.workers.tasks import scaffold_generation_task
-    task = scaffold_generation_task.delay(str(feature_id))
+    task = scaffold_generation_task.delay(str(feature_id), model_tier)
 
     feature.agent_task_id = task.id
     db.commit()
