@@ -65,6 +65,17 @@ class Settings(BaseSettings):
     bedrock_guardrail_id: str = ""
     bedrock_guardrail_version: str = "DRAFT"
 
+    # Cognito (optional — when set, Cognito JWTs are accepted alongside local JWTs)
+    cognito_user_pool_id: str = ""
+    cognito_client_id: str = ""
+    cognito_region: str = "us-east-1"
+
+    @property
+    def cognito_jwks_url(self) -> str:
+        if not self.cognito_user_pool_id:
+            return ""
+        return f"https://cognito-idp.{self.cognito_region}.amazonaws.com/{self.cognito_user_pool_id}/.well-known/jwks.json"
+
     # GitHub Webhooks — generate with: python -c "import secrets; print(secrets.token_hex(32))"
     github_webhook_secret: str = ""
 
