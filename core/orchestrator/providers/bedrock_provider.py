@@ -59,7 +59,9 @@ class BedrockProvider(LLMProvider):
         if self.bearer_token:
             response = await self._call_with_bearer(request_body)
         else:
-            response = self._call_with_boto3(request_body)
+            import asyncio
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, self._call_with_boto3, request_body)
 
         # Parse response
         content_text = ""

@@ -72,15 +72,22 @@ class VectorStore:
         ]
 
     def search_all_repos(self, project_id: str, repo_ids: list[str], query: str, n_results: int = 5) -> list[dict]:
-        """Search across all repos in a project, merge results by distance."""
+        """Search across all repos in a project in parallel, merge results by distance."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         all_results = []
-        for repo_id in repo_ids:
+
+        def _search_one(rid):
             try:
-                results = self.search_repo(project_id, repo_id, query, n_results=n_results)
-                all_results.extend(results)
+                return self.search_repo(project_id, rid, query, n_results=n_results)
             except Exception:
-                continue
-        # Sort by distance (lower = better match) and take top n
+                return []
+
+        with ThreadPoolExecutor(max_workers=min(len(repo_ids), 4)) as pool:
+            futures = [pool.submit(_search_one, rid) for rid in repo_ids]
+            for fut in as_completed(futures):
+                all_results.extend(fut.result())
+
         all_results.sort(key=lambda r: r.get("distance", 999))
         return all_results[:n_results]
 

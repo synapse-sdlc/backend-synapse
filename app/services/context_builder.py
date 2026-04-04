@@ -18,6 +18,9 @@ from app.models.knowledge_entry import KnowledgeEntry
 
 logger = logging.getLogger(__name__)
 
+MAX_REPO_CONTEXT_CHARS = 30_000   # ~7.5K tokens per repo
+MAX_TOTAL_CONTEXT_CHARS = 80_000  # ~20K tokens total
+
 
 def build_agent_context(db: Session, feature: Feature, user_role: str = "developer") -> str:
     """Build rich multi-layered context for the agent.
@@ -46,7 +49,10 @@ def build_agent_context(db: Session, feature: Feature, user_role: str = "develop
                 if r.repo_type:
                     header += f" ({r.repo_type})"
                 header += f"\nURL: {r.github_url}"
-                sections.append(f"{header}\n{r.codebase_context}")
+                ctx = r.codebase_context
+                if len(ctx) > MAX_REPO_CONTEXT_CHARS:
+                    ctx = ctx[:MAX_REPO_CONTEXT_CHARS] + "\n\n[... truncated — use search_codebase and read_file tools for details]"
+                sections.append(f"{header}\n{ctx}")
     elif project.codebase_context:
         sections.append(project.codebase_context)
 
@@ -75,7 +81,10 @@ def build_agent_context(db: Session, feature: Feature, user_role: str = "develop
     if config_section:
         sections.append(config_section)
 
-    return "\n\n---\n\n".join(sections) if sections else ""
+    combined = "\n\n---\n\n".join(sections) if sections else ""
+    if len(combined) > MAX_TOTAL_CONTEXT_CHARS:
+        combined = combined[:MAX_TOTAL_CONTEXT_CHARS] + "\n\n[... context truncated — use search_codebase and read_file tools to explore further]"
+    return combined
 
 
 def _format_project_architecture(content: dict) -> str:

@@ -108,13 +108,15 @@ class StoreArtifactTool:
                 f"---\n\n```json\n{art_content}\n```\n"
             )
 
-        # Sync to S3 (best-effort — never block the response)
-        s3_synced = False
+        # Sync to S3 (fire-and-forget — never block the response)
+        s3_synced = "pending"
         try:
-            _upload_to_s3(artifact_id, json_path)
-            s3_synced = True
+            import asyncio
+            loop = asyncio.get_event_loop()
+            loop.run_in_executor(None, _upload_to_s3, artifact_id, json_path)
         except Exception as e:
-            logging.getLogger("synapse.tools").warning(f"S3 artifact upload failed (non-fatal): {e}")
+            s3_synced = False
+            logging.getLogger("synapse.tools").warning(f"S3 upload schedule failed (non-fatal): {e}")
 
         return {
             "artifact_id": artifact_id,

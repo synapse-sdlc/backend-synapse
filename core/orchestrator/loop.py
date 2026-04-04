@@ -75,12 +75,19 @@ generate specs, create technical plans, and produce test cases.
 
     loop_start = time.monotonic()
     for turn in range(max_turns):
-        # Context management: compress old tool results if conversation is too large
-        _compress_context(messages, system_prompt_len=len(system_prompt))
+        # Context management: skip on early turns (not enough messages to overflow)
+        if len(messages) > 12:
+            _compress_context(messages, system_prompt_len=len(system_prompt))
 
-        # Emit thinking event before LLM call
+        # Emit thinking event before LLM call — context-aware message
         if on_event:
-            on_event({"type": "thinking", "message": f"Turn {turn + 1}/{max_turns}: Reasoning about next action...", "turn": turn + 1})
+            has_stored = any(m.get("tool_name") == "store_artifact" for m in messages if m.get("role") == "tool")
+            if turn > 4 and has_stored:
+                on_event({"type": "thinking", "message": f"Turn {turn + 1}: Reviewing stored artifact...", "turn": turn + 1})
+            elif turn > 3:
+                on_event({"type": "thinking", "message": f"Turn {turn + 1}: Generating output (may take a few minutes for large artifacts)...", "turn": turn + 1})
+            else:
+                on_event({"type": "thinking", "message": f"Turn {turn + 1}/{max_turns}: Reasoning about next action...", "turn": turn + 1})
 
         # Call LLM
         response = await provider.chat(
@@ -187,25 +194,34 @@ generate specs, create technical plans, and produce test cases.
             return result
 
         # Execute all tool calls in parallel (tools are async and independent)
+        import asyncio as _asyncio
+
         async def _exec_tool(tc):
             try:
-                return await registry.execute(tc["name"], tc["arguments"])
+                return await _asyncio.wait_for(
+                    registry.execute(tc["name"], tc["arguments"]),
+                    timeout=30.0,
+                )
+            except _asyncio.TimeoutError:
+                logger.warning(f"Tool {tc['name']} timed out after 30s")
+                return {"error": f"Tool {tc['name']} timed out after 30s"}
             except Exception as e:
                 # Retry once on transient errors
                 err_msg = str(e).lower()
                 if any(k in err_msg for k in ("timeout", "connection", "429", "503")):
                     logger.warning(f"Tool {tc['name']} transient error, retrying in 2s: {e}")
-                    import asyncio as _aio
-                    await _aio.sleep(2)
+                    await _asyncio.sleep(2)
                     try:
-                        return await registry.execute(tc["name"], tc["arguments"])
+                        return await _asyncio.wait_for(
+                            registry.execute(tc["name"], tc["arguments"]),
+                            timeout=30.0,
+                        )
                     except Exception as e2:
                         logger.warning(f"Tool {tc['name']} retry failed: {e2}")
                         return {"error": str(e2)}
                 logger.warning(f"Tool error {tc['name']}: {e}")
                 return {"error": str(e)}
 
-        import asyncio as _asyncio
         results = await _asyncio.gather(*[
             _exec_tool(tc) for tc in response["tool_calls"]
         ])
