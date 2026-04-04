@@ -24,6 +24,7 @@ def _verify_project(db: Session, project_id: UUID, user: CurrentUser) -> Project
 
 
 def _build_response(config: GithubConfig) -> GithubConfigResponse:
+    public_base = _s.public_url.strip().rstrip("/")
     return GithubConfigResponse(
         id=config.id,
         project_id=config.project_id,
@@ -31,7 +32,7 @@ def _build_response(config: GithubConfig) -> GithubConfigResponse:
         webhook_secret=config.webhook_secret,
         signing_secret=config.signing_secret,
         webhook_url=(
-            f"{_s.public_url.rstrip('/')}/webhooks/github/{config.webhook_secret}"
+            f"{public_base}/webhooks/github/{config.webhook_secret}"
             if config.webhook_secret
             else None
         ),

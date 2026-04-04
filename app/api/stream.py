@@ -41,3 +41,30 @@ async def stream_events(feature_id: str, token: str = Query(None)):
             await r.aclose()
 
     return EventSourceResponse(event_generator())
+
+
+@router.get("/projects/{project_id}/stream")
+async def stream_project_events(project_id: str, token: str = Query(None)):
+    """SSE endpoint that streams project analysis progress events from Redis pub/sub."""
+    if token:
+        from app.utils.auth import decode_access_token
+        decode_access_token(token)
+
+    async def event_generator():
+        r = aioredis.from_url(settings.redis_url)
+        pubsub = r.pubsub()
+        await pubsub.subscribe(f"project:{project_id}")
+
+        try:
+            while True:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if message and message["type"] == "message":
+                    yield {"data": message["data"].decode("utf-8")}
+                else:
+                    yield {"comment": "keepalive"}
+                await asyncio.sleep(0.1)
+        finally:
+            await pubsub.unsubscribe(f"project:{project_id}")
+            await r.aclose()
+
+    return EventSourceResponse(event_generator())
