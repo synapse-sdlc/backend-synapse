@@ -50,13 +50,26 @@ class Settings(BaseSettings):
     # 1. Bearer token (short-lived, 12 hrs): set AWS_BEARER_TOKEN_BEDROCK
     # 2. IAM keys (long-lived): set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
     # 3. Instance role (EC2/ECS): leave all empty, boto3 discovers automatically
-    aws_bearer_token_bedrock: str = ""  # Presigned bearer token for Bedrock (expires in ~12 hrs)
+    # Presigned bearer token for Bedrock (expires in ~12 hrs)
+    aws_bearer_token_bedrock: str = ""
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_session_token: str = ""  # Only for temporary STS credentials
 
+    # GitHub Webhooks — generate with: python -c "import secrets; print(secrets.token_hex(32))"
+    github_webhook_secret: str = ""
+
+    # Langfuse observability (optional — leave empty to disable)
+    # Sign up at https://cloud.langfuse.com or self-host
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://us.cloud.langfuse.com"
+    # SDK-standard alias — takes precedence over langfuse_host when set
+    langfuse_base_url: str = ""
+
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 
 settings = Settings()

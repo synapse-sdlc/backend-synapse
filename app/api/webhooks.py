@@ -1,25 +1,190 @@
 """
 Webhook receiver endpoints for external services (Jira, GitHub).
 
-These endpoints are NOT authenticated via JWT — external services can't send
-auth headers. Instead, they use secret tokens in the URL path.
+Handles:
+  - pull_request events: opened, synchronize (push to PR), closed (merged or not)
+  - workflow_run events:  completed with conclusion=success (Actions deployment)
+
+Authentication: HMAC-SHA256 signature in X-Hub-Signature-256 header.
+No user JWT required — GitHub signs every delivery with the shared secret.
+
+GitHub can deliver webhooks as either:
+  - application/json  → body is the raw JSON
+  - application/x-www-form-urlencoded → body is form-encoded; JSON lives in the
+    'payload' field (URL-decoded)
+Both content types are handled transparently.
 """
+
+import hashlib
+import hmac
+import json
 import logging
+import urllib.parse
 from datetime import datetime
 
-from fastapi import APIRouter, Request, Depends
-from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+
 
 from app.db import get_db
 from app.models.jira_config import JiraConfig
-from app.models.jira_issue_link import JiraIssueLink
 from app.utils.events import publish_feature_event
+from app.models.jira_issue_link import JiraIssueLink
+
+
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _verify_signature(body: bytes, signature_header: str) -> None:
+    """Raise 403 if the HMAC-SHA256 signature doesn't match."""
+    if not settings.github_webhook_secret:
+        # Webhook secret not configured — skip validation (dev/test only)
+        logger.warning(
+            "GITHUB_WEBHOOK_SECRET not set; skipping signature validation")
+        return
+
+    if not signature_header or not signature_header.startswith("sha256="):
+        raise HTTPException(
+            status_code=403, detail="Missing or invalid X-Hub-Signature-256")
+
+    expected = "sha256=" + hmac.new(
+        settings.github_webhook_secret.encode(),
+        body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    if not hmac.compare_digest(expected, signature_header):
+        raise HTTPException(status_code=403, detail="Signature mismatch")
+
+
+async def _parse_payload(request: Request, body: bytes) -> dict:
+    """Parse the webhook payload regardless of Content-Type.
+
+    GitHub sends either:
+      - application/json                  → body is raw JSON
+      - application/x-www-form-urlencoded → JSON is in the 'payload' form field
+    """
+    content_type = request.headers.get("content-type", "")
+    if "application/x-www-form-urlencoded" in content_type:
+        try:
+            form_data = urllib.parse.parse_qs(body.decode("utf-8"))
+            raw_json = form_data.get("payload", [None])[0]
+            if raw_json is None:
+                raise ValueError("'payload' field missing from form body")
+            return json.loads(raw_json)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid form-encoded payload: {exc}")
+    else:
+        try:
+            return json.loads(body)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid JSON payload: {exc}")
+
+
+@router.post("/webhooks/github", status_code=202)
+async def github_webhook(
+    request: Request,
+    x_github_event: str = Header(..., alias="X-GitHub-Event"),
+    x_hub_signature_256: str = Header("", alias="X-Hub-Signature-256"),
+):
+    body = await request.body()
+    _verify_signature(body, x_hub_signature_256)
+
+    # ping is GitHub confirming the webhook was configured — always accept
+    if x_github_event == "ping":
+        logger.info("GitHub webhook ping received (hook_id=%s)",
+                    request.headers.get("X-Github-Hook-Id", ""))
+        return {"accepted": True, "event": "ping"}
+
+    payload = await _parse_payload(request, body)
+
+    if x_github_event == "pull_request":
+        _handle_pull_request(payload)
+    elif x_github_event == "workflow_run":
+        _handle_workflow_run(payload)
+    else:
+        logger.debug("Unhandled GitHub event: %s", x_github_event)
+
+    return {"accepted": True}
+
+
+# ---------------------------------------------------------------------------
+# Event dispatchers
+# ---------------------------------------------------------------------------
+
+def _handle_pull_request(payload: dict) -> None:
+    action = payload.get("action")
+    if action not in ("opened", "synchronize", "closed"):
+        return
+
+    pr = payload.get("pull_request", {})
+    repo = payload.get("repository", {})
+    repo_full_name = repo.get("full_name", "")
+    pr_number = pr.get("number")
+
+    if not repo_full_name or not pr_number:
+        logger.warning("pull_request payload missing repo/pr_number")
+        return
+
+    from app.workers.tasks import webhook_pr_update_task
+
+    webhook_pr_update_task.delay(
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
+        action=action,
+        pr_payload={
+            "title": pr.get("title", ""),
+            "state": pr.get("state", "open"),
+            "merged": pr.get("merged", False),
+            "merged_at": pr.get("merged_at"),
+            "head_sha": pr.get("head", {}).get("sha", ""),
+            "head_branch": pr.get("head", {}).get("ref", ""),
+        },
+    )
+
+
+def _handle_workflow_run(payload: dict) -> None:
+    action = payload.get("action")
+    if action != "completed":
+        return
+
+    run = payload.get("workflow_run", {})
+    conclusion = run.get("conclusion")
+    if conclusion != "success":
+        # Only track successful deployments
+        return
+
+    repo = payload.get("repository", {})
+    repo_full_name = repo.get("full_name", "")
+    head_branch = run.get("head_branch", "")
+
+    if not repo_full_name:
+        logger.warning("workflow_run payload missing repository full_name")
+        return
+
+    from app.workers.tasks import webhook_deployment_task
+
+    webhook_deployment_task.delay(
+        repo_full_name=repo_full_name,
+        head_branch=head_branch,
+        run_payload={
+            "run_id": run.get("id"),
+            "run_url": run.get("html_url", ""),
+            "name": run.get("name", ""),
+            "conclusion": conclusion,
+            "completed_at": run.get("updated_at"),
+            "head_sha": run.get("head_sha", ""),
+            "pull_requests": run.get("pull_requests", []),
+        },
+    )
 
 
 @router.post("/webhooks/jira/{webhook_secret}")
@@ -52,7 +217,8 @@ async def jira_webhook(
 
     # 3. Verify Jira's HMAC signature if jira_webhook_secret is configured
     if config.jira_webhook_secret:
-        import hashlib, hmac
+        import hashlib
+        import hmac
         signature = request.headers.get("x-hub-signature")
         if signature:
             expected = hmac.new(
@@ -62,7 +228,8 @@ async def jira_webhook(
             ).hexdigest()
             sig_value = signature.replace("sha256=", "")
             if not hmac.compare_digest(sig_value, expected):
-                logger.warning(f"Jira webhook: HMAC signature mismatch for config {config.id}")
+                logger.warning(
+                    f"Jira webhook: HMAC signature mismatch for config {config.id}")
                 return JSONResponse(status_code=403, content={"detail": "Invalid signature"})
 
     event_type = payload.get("webhookEvent", "")
@@ -101,7 +268,8 @@ async def jira_webhook(
 
     if updated_features:
         db.commit()
-        logger.info(f"Jira webhook: {issue_key} → {new_status} (updated {len(updated_features)} feature(s))")
+        logger.info(
+            f"Jira webhook: {issue_key} → {new_status} (updated {len(updated_features)} feature(s))")
 
         # 6. Push real-time SSE updates
         for feature_id, old_status in updated_features.items():

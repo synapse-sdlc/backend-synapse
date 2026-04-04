@@ -36,7 +36,8 @@ def _get_sync_session() -> Session:
     if _sync_engine is None:
         sync_url = settings.database_url.replace("+asyncpg", "")
         ssl_mode = "disable" if "localhost" in sync_url else "require"
-        _sync_engine = create_engine(sync_url, connect_args={"sslmode": ssl_mode})
+        _sync_engine = create_engine(
+            sync_url, connect_args={"sslmode": ssl_mode})
     return Session(_sync_engine)
 
 
@@ -83,7 +84,8 @@ def _estimate_hours_saved(artifact_type, content):
         subtasks = len(content.get("subtasks", []))
         return 2.0 + subtasks * 0.3
     elif artifact_type == "tests":
-        cases = sum(len(s.get("test_cases", [])) for s in content.get("test_suites", []))
+        cases = sum(len(s.get("test_cases", []))
+                    for s in content.get("test_suites", []))
         return 1.5 + cases * 0.15
     return 0.5
 
@@ -97,17 +99,21 @@ def _update_feature_metrics(session, feature_id, result, task_start):
         if not feature:
             return
         duration_ms = int((time.monotonic() - task_start) * 1000)
-        feature.total_turns = (feature.total_turns or 0) + result.get("turns", 0)
-        feature.total_duration_ms = (feature.total_duration_ms or 0) + duration_ms
+        feature.total_turns = (feature.total_turns or 0) + \
+            result.get("turns", 0)
+        feature.total_duration_ms = (
+            feature.total_duration_ms or 0) + duration_ms
 
         # Estimate hours saved based on artifact
         artifact_id = result.get("artifact_id")
         if artifact_id:
             artifact = session.get(Artifact, artifact_id)
             if artifact and artifact.content:
-                feature.estimated_hours_saved = (feature.estimated_hours_saved or 0.0) + _estimate_hours_saved(artifact.type, artifact.content)
+                feature.estimated_hours_saved = (
+                    feature.estimated_hours_saved or 0.0) + _estimate_hours_saved(artifact.type, artifact.content)
         session.commit()
-        logger.info(f"Feature {feature_id} metrics: +{result.get('turns', 0)} turns, +{duration_ms}ms, total_hours_saved={feature.estimated_hours_saved:.1f}")
+        logger.info(
+            f"Feature {feature_id} metrics: +{result.get('turns', 0)} turns, +{duration_ms}ms, total_hours_saved={feature.estimated_hours_saved:.1f}")
     except Exception as e:
         logger.warning(f"Failed to update feature metrics: {e}")
 
@@ -122,16 +128,19 @@ def agent_run_task(self, feature_id: str, user_message: str, model_tier: str = "
         r = _get_redis()
         lock = r.lock(f"agent:{feature_id}", timeout=600, blocking_timeout=0)
         if not lock.acquire(blocking=False):
-            logger.warning(f"Agent lock held for feature {feature_id}, skipping")
+            logger.warning(
+                f"Agent lock held for feature {feature_id}, skipping")
             return {"skipped": True, "reason": "agent_locked"}
 
         from app.models.feature import Feature
         feature = session.get(Feature, feature_id)
         if not feature:
-            logger.warning(f"Feature {feature_id} not found, skipping stale task")
+            logger.warning(
+                f"Feature {feature_id} not found, skipping stale task")
             return {"skipped": True, "reason": "feature_not_found"}
 
-        _publish_feature_event(feature_id, {"type": "thinking", "message": "Agent is processing..."})
+        _publish_feature_event(
+            feature_id, {"type": "thinking", "message": "Agent is processing..."})
 
         def on_event(event):
             _publish_feature_event(feature_id, event)
@@ -146,6 +155,9 @@ def agent_run_task(self, feature_id: str, user_message: str, model_tier: str = "
             on_event=on_event,
             model_tier=model_tier,
         ))
+        # Flush Langfuse buffer before the task returns (worker won't shutdown between tasks)
+        from core.orchestrator.tracing import flush as _lf_flush
+        _lf_flush(blocking=True)
 
         # Track cost/time metrics on feature
         _update_feature_metrics(session, feature_id, result, task_start)
@@ -156,13 +168,15 @@ def agent_run_task(self, feature_id: str, user_message: str, model_tier: str = "
             "phase": result["phase"],
             "artifact_id": result.get("artifact_id"),
         })
-        _publish_feature_event(feature_id, {"type": "done", "phase": result["phase"]})
+        _publish_feature_event(
+            feature_id, {"type": "done", "phase": result["phase"]})
 
         return result
 
     except Exception as e:
         logger.exception(f"Agent turn failed for feature {feature_id}")
-        _publish_feature_event(feature_id, {"type": "error", "message": str(e)})
+        _publish_feature_event(
+            feature_id, {"type": "error", "message": str(e)})
         # Retry once on transient errors
         if self.request.retries < self.max_retries and _is_retryable(e):
             raise self.retry(countdown=10, exc=e)
@@ -191,16 +205,19 @@ def approval_agent_task(self, feature_id: str, model_tier: str = "balanced"):
         r = _get_redis()
         lock = r.lock(f"agent:{feature_id}", timeout=600, blocking_timeout=0)
         if not lock.acquire(blocking=False):
-            logger.warning(f"Agent lock held for feature {feature_id}, skipping approval")
+            logger.warning(
+                f"Agent lock held for feature {feature_id}, skipping approval")
             return {"skipped": True, "reason": "agent_locked"}
 
         from app.models.feature import Feature
         feature = session.get(Feature, feature_id)
         if not feature:
-            logger.warning(f"Feature {feature_id} not found, skipping stale approval task")
+            logger.warning(
+                f"Feature {feature_id} not found, skipping stale approval task")
             return {"skipped": True, "reason": "feature_not_found"}
 
-        _publish_feature_event(feature_id, {"type": "thinking", "message": "Generating next artifact..."})
+        _publish_feature_event(
+            feature_id, {"type": "thinking", "message": "Generating next artifact..."})
 
         def on_event(event):
             _publish_feature_event(feature_id, event)
@@ -214,6 +231,8 @@ def approval_agent_task(self, feature_id: str, model_tier: str = "balanced"):
             on_event=on_event,
             model_tier=model_tier,
         ))
+        from core.orchestrator.tracing import flush as _lf_flush
+        _lf_flush(blocking=True)
 
         # Track cost/time metrics on feature
         _update_feature_metrics(session, feature_id, result, task_start)
@@ -224,13 +243,15 @@ def approval_agent_task(self, feature_id: str, model_tier: str = "balanced"):
             "phase": result["phase"],
             "artifact_id": result.get("artifact_id"),
         })
-        _publish_feature_event(feature_id, {"type": "done", "phase": result["phase"]})
+        _publish_feature_event(
+            feature_id, {"type": "done", "phase": result["phase"]})
 
         return result
 
     except Exception as e:
         logger.exception(f"Approval agent failed for feature {feature_id}")
-        _publish_feature_event(feature_id, {"type": "error", "message": str(e)})
+        _publish_feature_event(
+            feature_id, {"type": "error", "message": str(e)})
         if self.request.retries < self.max_retries and _is_retryable(e):
             raise self.retry(countdown=10, exc=e)
         raise
@@ -257,7 +278,8 @@ def scaffold_generation_task(self, feature_id: str, model_tier: str = "balanced"
         r = _get_redis()
         lock = r.lock(f"agent:{feature_id}", timeout=600, blocking_timeout=0)
         if not lock.acquire(blocking=False):
-            logger.warning(f"Agent lock held for feature {feature_id}, skipping scaffold")
+            logger.warning(
+                f"Agent lock held for feature {feature_id}, skipping scaffold")
             return {"skipped": True, "reason": "agent_locked"}
 
         from app.models.feature import Feature
@@ -265,7 +287,8 @@ def scaffold_generation_task(self, feature_id: str, model_tier: str = "balanced"
         if not feature:
             return {"skipped": True, "reason": "feature_not_found"}
 
-        _publish_feature_event(feature_id, {"type": "thinking", "message": "Generating code scaffolds..."})
+        _publish_feature_event(
+            feature_id, {"type": "thinking", "message": "Generating code scaffolds..."})
 
         def on_event(event):
             _publish_feature_event(feature_id, event)
@@ -288,13 +311,16 @@ def scaffold_generation_task(self, feature_id: str, model_tier: str = "balanced"
             "phase": result["phase"],
             "artifact_id": result.get("artifact_id"),
         })
-        _publish_feature_event(feature_id, {"type": "done", "phase": result["phase"]})
+        _publish_feature_event(
+            feature_id, {"type": "done", "phase": result["phase"]})
 
         return result
 
     except Exception as e:
-        logger.exception(f"Scaffold generation failed for feature {feature_id}")
-        _publish_feature_event(feature_id, {"type": "error", "message": str(e)})
+        logger.exception(
+            f"Scaffold generation failed for feature {feature_id}")
+        _publish_feature_event(
+            feature_id, {"type": "error", "message": str(e)})
         if self.request.retries < self.max_retries and _is_retryable(e):
             raise self.retry(countdown=10, exc=e)
         raise
@@ -382,14 +408,16 @@ def analyze_repository_task(self, repository_id: str):
         session.commit()
 
         # Step 2: Get local path
-        local_repo_path = download_repo_from_s3(project_id, s3_key, repo_id=repo_id)
+        local_repo_path = download_repo_from_s3(
+            project_id, s3_key, repo_id=repo_id)
         _publish_project_event(project_id, {
             "type": "step", "step": f"{repo.name} cloned. Running analysis...", "repo_name": repo.name,
         })
 
         # Step 3: Static analysis via tree-sitter
         analysis = analyze_directory(local_repo_path)
-        logger.info(f"Analyzed {analysis['files_analyzed']} files for repo {repo.name}")
+        logger.info(
+            f"Analyzed {analysis['files_analyzed']} files for repo {repo.name}")
 
         # Step 4: Chunk and index (repo-scoped collection)
         _publish_project_event(project_id, {
@@ -413,7 +441,8 @@ def analyze_repository_task(self, repository_id: str):
         # Check if project has uploaded architecture to use as base
         uploaded_arch_context = ""
         if project and project.uploaded_architecture_id:
-            uploaded_art = session.get(Artifact, project.uploaded_architecture_id)
+            uploaded_art = session.get(
+                Artifact, project.uploaded_architecture_id)
             if uploaded_art:
                 arch_content = uploaded_art.content
                 if isinstance(arch_content, dict):
@@ -444,14 +473,26 @@ def analyze_repository_task(self, repository_id: str):
             user_message=user_message,
             skill_name="codebase-analysis",
             codebase_context=codebase_context + uploaded_arch_context,
+            # Observability: use repo_id as session so all analysis turns are grouped
+            trace_session_id=repo_id,
+            trace_metadata={
+                "repo_id": repo_id,
+                "project_id": project_id,
+                "repo_name": repo.name,
+                "task": "analyze_repository",
+            },
         ))
-        logger.info(f"Architecture generated for {repo.name} in {result['turns']} turns")
+        from core.orchestrator.tracing import flush as _lf_flush
+        _lf_flush(blocking=True)
+        logger.info(
+            f"Architecture generated for {repo.name} in {result['turns']} turns")
 
         # Step 7: Save architecture artifact to DB
         if result.get("artifact_id"):
             from pathlib import Path
 
-            artifact_path = Path("./artifacts") / f"{result['artifact_id']}.json"
+            artifact_path = Path("./artifacts") / \
+                f"{result['artifact_id']}.json"
             if artifact_path.exists():
                 artifact_data = json.loads(artifact_path.read_text())
                 content = artifact_data.get("content", "")
@@ -464,7 +505,8 @@ def analyze_repository_task(self, repository_id: str):
                 db_artifact = Artifact(
                     id=artifact_data["id"],
                     type=artifact_data["type"],
-                    name=artifact_data.get("name", f"Architecture: {repo.name}"),
+                    name=artifact_data.get(
+                        "name", f"Architecture: {repo.name}"),
                     content=content,
                     content_md=None,
                     parent_id=None,
@@ -491,12 +533,14 @@ def analyze_repository_task(self, repository_id: str):
             if project:
                 project.analysis_status = "ready"
                 session.commit()
-            _publish_project_event(project_id, {"type": "status", "status": "ready", "all_repos": True})
+            _publish_project_event(
+                project_id, {"type": "status", "status": "ready", "all_repos": True})
             # Trigger unified project architecture synthesis if multi-repo
             if len(all_repos) >= 2:
                 synthesize_project_task.delay(project_id)
 
-        logger.info(f"Repository {repo.name} ({repository_id}) analysis complete")
+        logger.info(
+            f"Repository {repo.name} ({repository_id}) analysis complete")
 
     except Exception as e:
         logger.exception(f"Repository analysis failed for {repository_id}")
@@ -541,26 +585,32 @@ def analyze_codebase_task(self, project_id: str, github_url: str):
 
         project.analysis_status = "analyzing"
         session.commit()
-        _publish_project_event(project_id, {"type": "status", "status": "analyzing"})
+        _publish_project_event(
+            project_id, {"type": "status", "status": "analyzing"})
 
         github_token = None
         if project.github_token_encrypted:
             from app.utils.crypto import decrypt_token
             github_token = decrypt_token(project.github_token_encrypted)
 
-        _publish_project_event(project_id, {"type": "step", "step": "Cloning repository..."})
-        s3_key = clone_repo_to_s3(project_id, github_url, github_token=github_token)
+        _publish_project_event(
+            project_id, {"type": "step", "step": "Cloning repository..."})
+        s3_key = clone_repo_to_s3(
+            project_id, github_url, github_token=github_token)
         project.s3_repo_key = s3_key
         session.commit()
 
         local_repo_path = download_repo_from_s3(project_id, s3_key)
-        _publish_project_event(project_id, {"type": "step", "step": "Repository cloned. Running analysis..."})
+        _publish_project_event(
+            project_id, {"type": "step", "step": "Repository cloned. Running analysis..."})
 
-        _publish_project_event(project_id, {"type": "step", "step": "Running static analysis..."})
+        _publish_project_event(
+            project_id, {"type": "step", "step": "Running static analysis..."})
         analysis = analyze_directory(local_repo_path)
         logger.info(f"Analyzed {analysis['files_analyzed']} files")
 
-        _publish_project_event(project_id, {"type": "step", "step": "Indexing codebase..."})
+        _publish_project_event(
+            project_id, {"type": "step", "step": "Indexing codebase..."})
         chunks = chunk_analysis_results(analysis)
         store = VectorStore()
         store.add_chunks(chunks)
@@ -570,7 +620,8 @@ def analyze_codebase_task(self, project_id: str, github_url: str):
         project.codebase_context = codebase_context
         session.commit()
 
-        _publish_project_event(project_id, {"type": "step", "step": "Generating architecture overview..."})
+        _publish_project_event(
+            project_id, {"type": "step", "step": "Generating architecture overview..."})
         provider = get_provider()
         from core.orchestrator.loop import agent_loop
         result = asyncio.run(agent_loop(
@@ -585,14 +636,16 @@ def analyze_codebase_task(self, project_id: str, github_url: str):
             from app.models.artifact import Artifact
             from pathlib import Path
 
-            artifact_path = Path("./artifacts") / f"{result['artifact_id']}.json"
+            artifact_path = Path("./artifacts") / \
+                f"{result['artifact_id']}.json"
             if artifact_path.exists():
                 artifact_data = json.loads(artifact_path.read_text())
                 db_artifact = Artifact(
                     id=artifact_data["id"],
                     type=artifact_data["type"],
                     name=artifact_data["name"],
-                    content=json.loads(artifact_data["content"]) if isinstance(artifact_data["content"], str) else artifact_data["content"],
+                    content=json.loads(artifact_data["content"]) if isinstance(
+                        artifact_data["content"], str) else artifact_data["content"],
                     content_md=None,
                     parent_id=None,
                     status="approved",
@@ -603,7 +656,8 @@ def analyze_codebase_task(self, project_id: str, github_url: str):
 
         project.analysis_status = "ready"
         session.commit()
-        _publish_project_event(project_id, {"type": "status", "status": "ready"})
+        _publish_project_event(
+            project_id, {"type": "status", "status": "ready"})
 
         logger.info(f"Project {project_id} analysis complete")
 
@@ -611,7 +665,8 @@ def analyze_codebase_task(self, project_id: str, github_url: str):
         logger.exception(f"Codebase analysis failed for project {project_id}")
         project.analysis_status = "failed"
         session.commit()
-        _publish_project_event(project_id, {"type": "error", "message": str(e)})
+        _publish_project_event(
+            project_id, {"type": "error", "message": str(e)})
     finally:
         session.close()
 
@@ -636,17 +691,20 @@ def kb_update_task(self, feature_id: str):
             artifact_ids.append(f"tests: {feature.tests_artifact_id}")
 
         if not artifact_ids:
-            logger.warning(f"No artifacts found for feature {feature_id}, skipping KB update")
+            logger.warning(
+                f"No artifacts found for feature {feature_id}, skipping KB update")
             return
 
-        _publish_feature_event(feature_id, {"type": "thinking", "message": "Generating knowledge base entry..."})
+        _publish_feature_event(
+            feature_id, {"type": "thinking", "message": "Generating knowledge base entry..."})
 
         provider = get_provider()
         from core.orchestrator.loop import agent_loop
 
         kb_message = (
             f"Feature: {feature.description}\n\n"
-            f"Artifact IDs:\n" + "\n".join(f"- {aid}" for aid in artifact_ids) + "\n\n"
+            f"Artifact IDs:\n" +
+            "\n".join(f"- {aid}" for aid in artifact_ids) + "\n\n"
             f"Read each artifact using get_artifact, then generate a KB entry "
             f"following the kb-update skill instructions."
         )
@@ -656,13 +714,15 @@ def kb_update_task(self, feature_id: str):
             user_message=kb_message,
             skill_name="kb-update",
         ))
-        logger.info(f"KB update completed for feature {feature_id} in {result['turns']} turns")
+        logger.info(
+            f"KB update completed for feature {feature_id} in {result['turns']} turns")
 
         if result.get("artifact_id"):
             from app.models.artifact import Artifact
             from pathlib import Path
 
-            artifact_path = Path("./artifacts") / f"{result['artifact_id']}.json"
+            artifact_path = Path("./artifacts") / \
+                f"{result['artifact_id']}.json"
             if artifact_path.exists():
                 artifact_data = json.loads(artifact_path.read_text())
                 content = artifact_data.get("content", "")
@@ -675,7 +735,8 @@ def kb_update_task(self, feature_id: str):
                 db_artifact = Artifact(
                     id=artifact_data["id"],
                     type="kb",
-                    name=artifact_data.get("name", f"KB: {feature.description}"),
+                    name=artifact_data.get(
+                        "name", f"KB: {feature.description}"),
                     content=content,
                     parent_id=feature.tests_artifact_id or feature.plan_artifact_id or feature.spec_artifact_id,
                     status="approved",
@@ -713,7 +774,8 @@ def _build_epic_description(spec, plan, tests):
 
     lines.append("## Scope")
     lines.append(f"- **{len(stories)}** user stories")
-    lines.append(f"- **{len(subtasks)}** implementation tasks ({total_hours}h estimated)")
+    lines.append(
+        f"- **{len(subtasks)}** implementation tasks ({total_hours}h estimated)")
     lines.append(f"- **{total_tests}** test cases across {len(suites)} suites")
     lines.append("")
 
@@ -721,7 +783,8 @@ def _build_epic_description(spec, plan, tests):
         lines.append("## Target Users")
         for p in spec["personas"]:
             if isinstance(p, dict):
-                lines.append(f"- **{p.get('name', '')}**: {p.get('description', '')}")
+                lines.append(
+                    f"- **{p.get('name', '')}**: {p.get('description', '')}")
         lines.append("")
 
     if spec.get("success_metrics"):
@@ -752,7 +815,8 @@ def _build_story_description(story, spec):
     lines = []
     # User story format
     lines.append("## User Story")
-    lines.append(f"**As a** {story.get('role', '...')}, **I want** {story.get('action', '...')}, **so that** {story.get('benefit', '...')}.")
+    lines.append(
+        f"**As a** {story.get('role', '...')}, **I want** {story.get('action', '...')}, **so that** {story.get('benefit', '...')}.")
     lines.append("")
 
     # Acceptance criteria
@@ -814,7 +878,8 @@ def _build_subtask_description(subtask, plan):
         lines.append("## Affected Routes / Files")
         for r in routes:
             if isinstance(r, dict):
-                lines.append(f"- `{r.get('method', '')} {r.get('path', '')}` in `{r.get('file', '')}` — {r.get('change', '')}")
+                lines.append(
+                    f"- `{r.get('method', '')} {r.get('path', '')}` in `{r.get('file', '')}` — {r.get('change', '')}")
             else:
                 lines.append(f"- {r}")
         lines.append("")
@@ -825,7 +890,8 @@ def _build_subtask_description(subtask, plan):
         lines.append("## Data Flow")
         for step in data_flow:
             if isinstance(step, dict):
-                lines.append(f"- **{step.get('component', '')}**: {step.get('description', '')}")
+                lines.append(
+                    f"- **{step.get('component', '')}**: {step.get('description', '')}")
             else:
                 lines.append(f"- {step}")
         lines.append("")
@@ -836,7 +902,8 @@ def _build_subtask_description(subtask, plan):
         lines.append("## Database Migrations")
         for m in migrations:
             if isinstance(m, dict):
-                lines.append(f"- `{m.get('table', '')}`: {m.get('change', '')}")
+                lines.append(
+                    f"- `{m.get('table', '')}`: {m.get('change', '')}")
                 if m.get("sql_hint"):
                     lines.append(f"```\n{m['sql_hint']}\n```")
             else:
@@ -849,11 +916,13 @@ def _build_subtask_description(subtask, plan):
         lines.append("## Risks")
         for r in risks:
             if isinstance(r, dict):
-                lines.append(f"- **[{r.get('severity', 'medium').upper()}]** {r.get('description', '')} — *Mitigation:* {r.get('mitigation', '')}")
+                lines.append(
+                    f"- **[{r.get('severity', 'medium').upper()}]** {r.get('description', '')} — *Mitigation:* {r.get('mitigation', '')}")
         lines.append("")
 
     lines.append("---")
-    lines.append("*Generated by Synapse AI SDLC Platform — this ticket contains enough context for an AI coding agent to implement.*")
+    lines.append(
+        "*Generated by Synapse AI SDLC Platform — this ticket contains enough context for an AI coding agent to implement.*")
     return "\n".join(lines)
 
 
@@ -866,7 +935,8 @@ def _build_test_description(tc, suite):
         lines.append(tc["description"])
     lines.append("")
 
-    lines.append(f"**Suite:** {suite.get('name', '')} ({suite.get('type', '')})")
+    lines.append(
+        f"**Suite:** {suite.get('name', '')} ({suite.get('type', '')})")
     lines.append(f"**Priority:** {tc.get('priority', 'medium')}")
     lines.append(f"**Automated:** {'Yes' if tc.get('automated') else 'No'}")
     lines.append("")
@@ -915,7 +985,8 @@ def jira_export_task(self, feature_id: str, project_key_override: str = None):
             return
 
         config = session.execute(
-            select(JiraConfig).where(JiraConfig.project_id == feature.project_id)
+            select(JiraConfig).where(
+                JiraConfig.project_id == feature.project_id)
         ).scalars().first()
         if not config:
             logger.error(f"No Jira config for project {feature.project_id}")
@@ -931,7 +1002,8 @@ def jira_export_task(self, feature_id: str, project_key_override: str = None):
         svc = JiraService(config.site_url, config.user_email, token)
         project_key = project_key_override or config.default_project_key
 
-        _publish_feature_event(feature_id, {"type": "jira_export", "step": "Starting Jira export..."})
+        _publish_feature_event(
+            feature_id, {"type": "jira_export", "step": "Starting Jira export..."})
 
         # Load artifacts
         spec_content = {}
@@ -940,15 +1012,18 @@ def jira_export_task(self, feature_id: str, project_key_override: str = None):
         if feature.spec_artifact_id:
             art = session.get(Artifact, feature.spec_artifact_id)
             if art:
-                spec_content = art.content if isinstance(art.content, dict) else {}
+                spec_content = art.content if isinstance(
+                    art.content, dict) else {}
         if feature.plan_artifact_id:
             art = session.get(Artifact, feature.plan_artifact_id)
             if art:
-                plan_content = art.content if isinstance(art.content, dict) else {}
+                plan_content = art.content if isinstance(
+                    art.content, dict) else {}
         if feature.tests_artifact_id:
             art = session.get(Artifact, feature.tests_artifact_id)
             if art:
-                tests_content = art.content if isinstance(art.content, dict) else {}
+                tests_content = art.content if isinstance(
+                    art.content, dict) else {}
 
         # Build story_key_map from existing links (for incremental exports)
         story_key_map = {}
@@ -967,9 +1042,12 @@ def jira_export_task(self, feature_id: str, project_key_override: str = None):
 
         # --- Epic + Stories (from spec) ---
         if "epic" not in existing_types and spec_content:
-            feature_name = spec_content.get("feature_name", feature.description)
-            epic_desc = _build_epic_description(spec_content, plan_content, tests_content)
-            epic = asyncio.run(svc.create_epic(project_key, feature_name, epic_desc))
+            feature_name = spec_content.get(
+                "feature_name", feature.description)
+            epic_desc = _build_epic_description(
+                spec_content, plan_content, tests_content)
+            epic = asyncio.run(svc.create_epic(
+                project_key, feature_name, epic_desc))
             epic_key = epic["key"]
             feature.jira_epic_key = epic_key
             session.commit()
@@ -980,14 +1058,16 @@ def jira_export_task(self, feature_id: str, project_key_override: str = None):
                 source_artifact_id=feature.spec_artifact_id,
             ))
             created += 1
-            _publish_feature_event(feature_id, {"type": "jira_export", "step": f"Epic created: {epic_key}"})
+            _publish_feature_event(
+                feature_id, {"type": "jira_export", "step": f"Epic created: {epic_key}"})
 
             for story in spec_content.get("user_stories", []):
                 story_id = story.get("id", "")
                 summary = f"[{story_id}] As a {story.get('role', 'user')}, I want {story.get('action', '...')}"
                 desc = _build_story_description(story, spec_content)
 
-                result = asyncio.run(svc.create_story(project_key, summary[:250], desc, epic_key=epic_key))
+                result = asyncio.run(svc.create_story(
+                    project_key, summary[:250], desc, epic_key=epic_key))
                 story_key_map[story_id] = result["key"]
                 session.add(JiraIssueLink(
                     feature_id=feature_id, issue_key=result["key"], issue_type="story",
@@ -996,24 +1076,29 @@ def jira_export_task(self, feature_id: str, project_key_override: str = None):
                     source_artifact_id=feature.spec_artifact_id, source_item_id=story_id,
                 ))
                 created += 1
-                _publish_feature_event(feature_id, {"type": "jira_export", "step": f"Story created: {result['key']}"})
+                _publish_feature_event(
+                    feature_id, {"type": "jira_export", "step": f"Story created: {result['key']}"})
 
         # --- Subtasks (from plan) ---
         if "subtask" not in existing_types and plan_content and epic_key:
             for subtask in plan_content.get("subtasks", []):
-                parent_key = story_key_map.get(subtask.get("story_id"), epic_key)
+                parent_key = story_key_map.get(
+                    subtask.get("story_id"), epic_key)
                 summary = f"[{subtask.get('id', '')}] {subtask.get('title', 'Subtask')}"
                 desc = _build_subtask_description(subtask, plan_content)
 
-                result = asyncio.run(svc.create_subtask(project_key, summary[:250], desc, parent_key=parent_key))
+                result = asyncio.run(svc.create_subtask(
+                    project_key, summary[:250], desc, parent_key=parent_key))
                 session.add(JiraIssueLink(
                     feature_id=feature_id, issue_key=result["key"], issue_type="subtask",
                     issue_url=result["url"], summary=summary[:250],
                     parent_issue_key=parent_key,
-                    source_artifact_id=feature.plan_artifact_id, source_item_id=subtask.get("id", ""),
+                    source_artifact_id=feature.plan_artifact_id, source_item_id=subtask.get(
+                        "id", ""),
                 ))
                 created += 1
-                _publish_feature_event(feature_id, {"type": "jira_export", "step": f"Subtask created: {result['key']}"})
+                _publish_feature_event(
+                    feature_id, {"type": "jira_export", "step": f"Subtask created: {result['key']}"})
 
         # --- Test cases (from tests) ---
         if "test" not in existing_types and tests_content and epic_key:
@@ -1030,7 +1115,8 @@ def jira_export_task(self, feature_id: str, project_key_override: str = None):
                         feature_id=feature_id, issue_key=result["key"], issue_type="test",
                         issue_url=result["url"], summary=summary[:250],
                         parent_issue_key=parent_key,
-                        source_artifact_id=feature.tests_artifact_id, source_item_id=tc.get("id", ""),
+                        source_artifact_id=feature.tests_artifact_id, source_item_id=tc.get(
+                            "id", ""),
                     ))
                     created += 1
 
@@ -1050,7 +1136,8 @@ def jira_export_task(self, feature_id: str, project_key_override: str = None):
 
     except Exception as e:
         logger.exception(f"Jira export failed for feature {feature_id}")
-        _publish_feature_event(feature_id, {"type": "error", "message": f"Jira export failed: {e}"})
+        _publish_feature_event(
+            feature_id, {"type": "error", "message": f"Jira export failed: {e}"})
     finally:
         session.close()
 
@@ -1072,7 +1159,8 @@ def jira_sync_task(self, feature_id: str):
             return
 
         config = session.execute(
-            select(JiraConfig).where(JiraConfig.project_id == feature.project_id)
+            select(JiraConfig).where(
+                JiraConfig.project_id == feature.project_id)
         ).scalars().first()
         if not config:
             return
@@ -1101,7 +1189,8 @@ def jira_sync_task(self, feature_id: str):
                 link.status_synced_at = now
 
         session.commit()
-        _publish_feature_event(feature_id, {"type": "jira_sync", "synced": len(links)})
+        _publish_feature_event(
+            feature_id, {"type": "jira_sync", "synced": len(links)})
 
     except Exception as e:
         logger.exception(f"Jira sync failed for feature {feature_id}")
@@ -1130,7 +1219,8 @@ def pr_sync_task(self, feature_id: str):
 
         token = None
         repos = session.execute(
-            select(Repository).where(Repository.project_id == feature.project_id)
+            select(Repository).where(
+                Repository.project_id == feature.project_id)
         ).scalars().all()
         for r in repos:
             if r.github_token_encrypted:
@@ -1155,15 +1245,20 @@ def pr_sync_task(self, feature_id: str):
         for link in links:
             try:
                 owner, repo = link.repo_full_name.split("/", 1)
-                pr_data = asyncio.run(svc.get_pull_request(owner, repo, link.pr_number))
-                link.state = "merged" if pr_data.get("merged_at") else pr_data.get("state", "open")
+                pr_data = asyncio.run(svc.get_pull_request(
+                    owner, repo, link.pr_number))
+                link.state = "merged" if pr_data.get(
+                    "merged_at") else pr_data.get("state", "open")
                 link.merged_at = pr_data.get("merged_at")
                 link.synced_at = datetime.utcnow()
 
                 if link.state == "merged" and not link.kb_updated:
-                    link.files_changed = asyncio.run(svc.get_pr_files(owner, repo, link.pr_number))
-                    link.commit_messages = asyncio.run(svc.get_pr_commits(owner, repo, link.pr_number))
-                    diff = asyncio.run(svc.get_pr_diff(owner, repo, link.pr_number))
+                    link.files_changed = asyncio.run(
+                        svc.get_pr_files(owner, repo, link.pr_number))
+                    link.commit_messages = asyncio.run(
+                        svc.get_pr_commits(owner, repo, link.pr_number))
+                    diff = asyncio.run(svc.get_pr_diff(
+                        owner, repo, link.pr_number))
                     link.diff_summary = diff[:5000] if diff else None
                     pr_kb_update_task.delay(str(feature_id), str(link.id))
             except Exception as e:
@@ -1190,7 +1285,8 @@ def pr_kb_update_task(self, feature_id: str, pr_link_id: str):
         if not feature or not pr_link:
             return
 
-        _publish_feature_event(feature_id, {"type": "thinking", "message": "Updating KB from merged PR..."})
+        _publish_feature_event(
+            feature_id, {"type": "thinking", "message": "Updating KB from merged PR..."})
 
         # Build prompt with PR data
         pr_context = (
@@ -1219,7 +1315,8 @@ def pr_kb_update_task(self, feature_id: str, pr_link_id: str):
 
         message = (
             f"Feature: {feature.description}\n\n"
-            f"Artifact IDs:\n" + "\n".join(f"- {a}" for a in artifact_refs) + "\n\n"
+            f"Artifact IDs:\n" +
+            "\n".join(f"- {a}" for a in artifact_refs) + "\n\n"
             f"{pr_context}\n\n"
             f"Read the existing artifacts and the PR data above. "
             f"Generate an updated KB entry that compares what was PLANNED vs ACTUALLY IMPLEMENTED. "
@@ -1238,7 +1335,8 @@ def pr_kb_update_task(self, feature_id: str, pr_link_id: str):
             from app.models.artifact import Artifact
             from pathlib import Path
 
-            artifact_path = Path("./artifacts") / f"{result['artifact_id']}.json"
+            artifact_path = Path("./artifacts") / \
+                f"{result['artifact_id']}.json"
             if artifact_path.exists():
                 artifact_data = json.loads(artifact_path.read_text())
                 content = artifact_data.get("content", "")
@@ -1251,7 +1349,8 @@ def pr_kb_update_task(self, feature_id: str, pr_link_id: str):
                 db_artifact = Artifact(
                     id=artifact_data["id"],
                     type="kb",
-                    name=artifact_data.get("name", f"KB (PR update): {feature.description}"),
+                    name=artifact_data.get(
+                        "name", f"KB (PR update): {feature.description}"),
                     content=content,
                     parent_id=feature.tests_artifact_id or feature.plan_artifact_id,
                     status="approved",
@@ -1262,10 +1361,267 @@ def pr_kb_update_task(self, feature_id: str, pr_link_id: str):
 
         pr_link.kb_updated = True
         session.commit()
-        _publish_feature_event(feature_id, {"type": "kb_updated", "pr_url": pr_link.pr_url})
+        _publish_feature_event(
+            feature_id, {"type": "kb_updated", "pr_url": pr_link.pr_url})
 
     except Exception as e:
         logger.exception(f"PR KB update failed for feature {feature_id}")
+    finally:
+        session.close()
+
+
+@celery_app.task(bind=True, name="app.workers.tasks.webhook_pr_update_task", time_limit=120, max_retries=0)
+def webhook_pr_update_task(
+    self,
+    repo_full_name: str,
+    pr_number: int,
+    action: str,
+    pr_payload: dict,
+):
+    """Process a pull_request webhook event (opened / synchronize / closed).
+
+    Matches the incoming repo+PR number to PullRequestLink rows and updates
+    state, triggering KB generation on merge just like pr_sync_task does.
+    """
+    from datetime import datetime
+
+    session = _get_sync_session()
+    try:
+        from app.models.pr_link import PullRequestLink
+        from app.models.feature import Feature
+        from app.services.github_service import GitHubService
+
+        links = session.execute(
+            select(PullRequestLink).where(
+                PullRequestLink.repo_full_name == repo_full_name,
+                PullRequestLink.pr_number == pr_number,
+            )
+        ).scalars().all()
+
+        if not links:
+            logger.debug(
+                "webhook_pr_update_task: no links found for %s#%s", repo_full_name, pr_number)
+            return
+
+        for link in links:
+            feature_id = str(link.feature_id)
+
+            if action == "synchronize":
+                # New commits pushed — fetch fresh diff/files/commits via GitHub API
+                feature = session.get(Feature, link.feature_id)
+                if feature:
+                    from app.models.repository import Repository
+                    from app.models.project import Project
+                    from app.utils.crypto import decrypt_token
+
+                    token = None
+                    repos = session.execute(
+                        select(Repository).where(
+                            Repository.project_id == feature.project_id)
+                    ).scalars().all()
+                    for r in repos:
+                        if r.github_token_encrypted:
+                            token = decrypt_token(r.github_token_encrypted)
+                            break
+                    if not token:
+                        project = session.get(Project, feature.project_id)
+                        if project and project.github_token_encrypted:
+                            token = decrypt_token(
+                                project.github_token_encrypted)
+
+                    if token:
+                        svc = GitHubService(token)
+                        owner, repo = repo_full_name.split("/", 1)
+                        try:
+                            link.files_changed = asyncio.run(
+                                svc.get_pr_files(owner, repo, pr_number))
+                            link.commit_messages = asyncio.run(
+                                svc.get_pr_commits(owner, repo, pr_number))
+                            diff = asyncio.run(
+                                svc.get_pr_diff(owner, repo, pr_number))
+                            link.diff_summary = diff[:5000] if diff else None
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to fetch PR details for %s#%s: %s", repo_full_name, pr_number, e)
+
+                link.synced_at = datetime.utcnow()
+                _publish_feature_event(feature_id, {
+                    "type": "pr_updated",
+                    "pr_url": link.pr_url,
+                    "action": "synchronize",
+                    "head_sha": pr_payload.get("head_sha", ""),
+                })
+
+            elif action == "closed":
+                merged = pr_payload.get("merged", False)
+                if merged:
+                    link.state = "merged"
+                    link.merged_at = pr_payload.get("merged_at")
+
+                    # Fetch diff/files if not already present
+                    if not link.diff_summary:
+                        feature = session.get(Feature, link.feature_id)
+                        if feature:
+                            from app.models.repository import Repository
+                            from app.models.project import Project
+                            from app.utils.crypto import decrypt_token
+
+                            token = None
+                            repos = session.execute(
+                                select(Repository).where(
+                                    Repository.project_id == feature.project_id)
+                            ).scalars().all()
+                            for r in repos:
+                                if r.github_token_encrypted:
+                                    token = decrypt_token(
+                                        r.github_token_encrypted)
+                                    break
+                            if not token:
+                                project = session.get(
+                                    Project, feature.project_id)
+                                if project and project.github_token_encrypted:
+                                    token = decrypt_token(
+                                        project.github_token_encrypted)
+
+                            if token:
+                                svc = GitHubService(token)
+                                owner, repo = repo_full_name.split("/", 1)
+                                try:
+                                    link.files_changed = asyncio.run(
+                                        svc.get_pr_files(owner, repo, pr_number))
+                                    link.commit_messages = asyncio.run(
+                                        svc.get_pr_commits(owner, repo, pr_number))
+                                    diff = asyncio.run(
+                                        svc.get_pr_diff(owner, repo, pr_number))
+                                    link.diff_summary = diff[:5000] if diff else None
+                                except Exception as e:
+                                    logger.warning(
+                                        "Failed to fetch PR details for %s#%s: %s", repo_full_name, pr_number, e)
+
+                    if not link.kb_updated:
+                        pr_kb_update_task.delay(feature_id, str(link.id))
+
+                    _publish_feature_event(feature_id, {
+                        "type": "pr_merged",
+                        "pr_url": link.pr_url,
+                        "merged_at": link.merged_at,
+                    })
+                else:
+                    link.state = "closed"
+                    _publish_feature_event(feature_id, {
+                        "type": "pr_closed",
+                        "pr_url": link.pr_url,
+                    })
+
+                link.synced_at = datetime.utcnow()
+
+            elif action == "opened":
+                # PR was just opened — refresh state (may have been pre-linked as closed)
+                link.state = "open"
+                link.synced_at = datetime.utcnow()
+                _publish_feature_event(feature_id, {
+                    "type": "pr_opened",
+                    "pr_url": link.pr_url,
+                })
+
+        session.commit()
+
+    except Exception as e:
+        logger.exception(
+            "webhook_pr_update_task failed for %s#%s", repo_full_name, pr_number)
+    finally:
+        session.close()
+
+
+@celery_app.task(bind=True, name="app.workers.tasks.webhook_deployment_task", time_limit=60, max_retries=0)
+def webhook_deployment_task(self, repo_full_name: str, head_branch: str, run_payload: dict):
+    """Process a workflow_run completed=success webhook event.
+
+    Matches by repo_full_name and head_branch against open/merged PullRequestLink rows
+    and stores the deployment status. Publishes a deployment_success SSE event.
+    """
+    from datetime import datetime
+
+    session = _get_sync_session()
+    try:
+        from app.models.pr_link import PullRequestLink
+
+        # Start with links for the repository, then narrow to the workflow run's PRs.
+        query = select(PullRequestLink).where(
+            PullRequestLink.repo_full_name == repo_full_name,
+        )
+        links = session.execute(query).scalars().all()
+
+        # Use pull_requests from the workflow_run payload to narrow precisely
+        pull_requests = run_payload.get("pull_requests") or []
+        pr_urls = set()
+        pr_numbers = set()
+        for pr in pull_requests:
+            if not isinstance(pr, dict):
+                continue
+            html_url = pr.get("html_url")
+            if html_url:
+                pr_urls.add(html_url)
+            number = pr.get("number")
+            if number is not None:
+                pr_numbers.add(str(number))
+
+        if pr_urls or pr_numbers:
+            # Narrow to open/merged links that correspond to the workflow run's PRs
+            matched = []
+            for lnk in links:
+                if lnk.state not in ("open", "merged"):
+                    continue
+                if lnk.pr_url in pr_urls:
+                    matched.append(lnk)
+                    continue
+                if any(lnk.pr_url.endswith(f"/pull/{n}") for n in pr_numbers):
+                    matched.append(lnk)
+        else:
+            # Fallback: no PR references in payload — match all open/merged for this repo
+            logger.debug(
+                "webhook_deployment_task: no PR references in payload for %s branch=%s, "
+                "falling back to all open/merged links",
+                repo_full_name, head_branch,
+            )
+            matched = [
+                lnk for lnk in links
+                if lnk.state in ("open", "merged")
+            ]
+
+        if not matched:
+            logger.debug(
+                "webhook_deployment_task: no matching links for %s branch=%s",
+                repo_full_name, head_branch,
+            )
+            return
+
+        deployment_record = {
+            "branch": head_branch,
+            "run_id": run_payload.get("run_id"),
+            "run_url": run_payload.get("run_url", ""),
+            "name": run_payload.get("name", ""),
+            "conclusion": run_payload.get("conclusion", "success"),
+            "completed_at": run_payload.get("completed_at"),
+            "head_sha": run_payload.get("head_sha", ""),
+        }
+
+        for link in matched:
+            feature_id = str(link.feature_id)
+            link.deployment_status = deployment_record
+            _publish_feature_event(feature_id, {
+                "type": "deployment_success",
+                "pr_url": link.pr_url,
+                "branch": head_branch,
+                "run_url": run_payload.get("run_url", ""),
+                "workflow_name": run_payload.get("name", ""),
+            })
+
+        session.commit()
+
+    except Exception as e:
+        logger.exception(
+            "webhook_deployment_task failed for %s branch=%s", repo_full_name, head_branch)
     finally:
         session.close()
 
@@ -1307,7 +1663,8 @@ def knowledge_query_task(self, project_id: str, question: str, persona: str, que
 
         codebase_context += knowledge_context
 
-        _publish_event(f"knowledge:{query_id}", {"type": "thinking", "message": "Searching knowledge base..."})
+        _publish_event(f"knowledge:{query_id}", {
+                       "type": "thinking", "message": "Searching knowledge base..."})
 
         # --- Tier 1: Vector search for targeted context ---
         vector_context = ""
@@ -1316,7 +1673,8 @@ def knowledge_query_task(self, project_id: str, question: str, persona: str, que
             store = VectorStore()
 
             # Search knowledge base (decisions, patterns, lessons)
-            kb_results = store.search_knowledge(project_id, question, n_results=5)
+            kb_results = store.search_knowledge(
+                project_id, question, n_results=5)
             if kb_results:
                 vector_context += "\n\n## Relevant Knowledge (vector search)\n"
                 for r in kb_results:
@@ -1325,7 +1683,8 @@ def knowledge_query_task(self, project_id: str, question: str, persona: str, que
             # Search codebase for implementation details
             repo_ids = [str(r.id) for r in repos]
             if repo_ids:
-                code_results = store.search_all_repos(project_id, repo_ids, question, n_results=5)
+                code_results = store.search_all_repos(
+                    project_id, repo_ids, question, n_results=5)
                 if code_results:
                     vector_context += "\n\n## Relevant Code (vector search)\n"
                     for r in code_results:
@@ -1341,7 +1700,8 @@ def knowledge_query_task(self, project_id: str, question: str, persona: str, que
             "developer": "Focus on code patterns, API contracts, implementation details. Include file paths and function signatures.",
             "tech_lead": "Focus on architecture decisions, trade-offs, risks, and cross-repo dependencies. Include file paths.",
         }
-        persona_guide = persona_guides.get(persona, persona_guides["developer"])
+        persona_guide = persona_guides.get(
+            persona, persona_guides["developer"])
 
         system_prompt = f"""You are a Synapse knowledge assistant. Answer the user's question
 based on the provided project context. Be specific and cite sources.
@@ -1383,7 +1743,8 @@ based on the provided project context. Be specific and cite sources.
 
     except Exception as e:
         logger.exception(f"Knowledge query failed: {question}")
-        _publish_event(f"knowledge:{query_id}", {"type": "error", "message": str(e)})
+        _publish_event(f"knowledge:{query_id}", {
+                       "type": "error", "message": str(e)})
     finally:
         session.close()
 
@@ -1411,7 +1772,8 @@ def synthesize_project_task(self, project_id: str):
         ).scalars().all()
 
         if len(repos) < 2:
-            logger.info(f"Project {project_id} has <2 repos, skipping synthesis")
+            logger.info(
+                f"Project {project_id} has <2 repos, skipping synthesis")
             return
 
         # Collect per-repo architecture artifact IDs
@@ -1423,10 +1785,12 @@ def synthesize_project_task(self, project_id: str):
         ).scalars().all()
 
         if not arch_artifacts:
-            logger.warning(f"No architecture artifacts for project {project_id}")
+            logger.warning(
+                f"No architecture artifacts for project {project_id}")
             return
 
-        _publish_project_event(project_id, {"type": "step", "step": "Synthesizing cross-repo architecture..."})
+        _publish_project_event(
+            project_id, {"type": "step", "step": "Synthesizing cross-repo architecture..."})
 
         # Build message with all architecture artifact IDs
         arch_refs = "\n".join(
@@ -1461,12 +1825,14 @@ def synthesize_project_task(self, project_id: str):
             skill_name="project-synthesis",
             codebase_context=codebase_context,
         ))
-        logger.info(f"Project synthesis completed for {project_id} in {result['turns']} turns")
+        logger.info(
+            f"Project synthesis completed for {project_id} in {result['turns']} turns")
 
         # Save project_architecture artifact to DB
         if result.get("artifact_id"):
             from pathlib import Path
-            artifact_path = Path("./artifacts") / f"{result['artifact_id']}.json"
+            artifact_path = Path("./artifacts") / \
+                f"{result['artifact_id']}.json"
             if artifact_path.exists():
                 artifact_data = json.loads(artifact_path.read_text())
                 content = artifact_data.get("content", "")
@@ -1479,7 +1845,8 @@ def synthesize_project_task(self, project_id: str):
                 db_artifact = Artifact(
                     id=artifact_data["id"],
                     type="project_architecture",
-                    name=artifact_data.get("name", f"Unified Architecture: {project.name}"),
+                    name=artifact_data.get(
+                        "name", f"Unified Architecture: {project.name}"),
                     content=content,
                     status="approved",
                     version=1,
@@ -1488,7 +1855,8 @@ def synthesize_project_task(self, project_id: str):
                 session.merge(db_artifact)
                 session.commit()
 
-        _publish_project_event(project_id, {"type": "status", "status": "synthesis_complete"})
+        _publish_project_event(
+            project_id, {"type": "status", "status": "synthesis_complete"})
 
     except Exception as e:
         logger.exception(f"Project synthesis failed for {project_id}")
@@ -1516,7 +1884,8 @@ def kb_accumulate_task(self, feature_id: str, kb_artifact_id: str):
 
         kb_artifact = session.get(Artifact, kb_artifact_id)
         if not kb_artifact or not isinstance(kb_artifact.content, dict):
-            logger.warning(f"KB artifact {kb_artifact_id} not found or invalid")
+            logger.warning(
+                f"KB artifact {kb_artifact_id} not found or invalid")
             return
 
         content = kb_artifact.content
@@ -1525,7 +1894,8 @@ def kb_accumulate_task(self, feature_id: str, kb_artifact_id: str):
 
         # Extract decisions
         for decision in (content.get("key_decisions") or []):
-            text = decision if isinstance(decision, str) else decision.get("decision", str(decision))
+            text = decision if isinstance(
+                decision, str) else decision.get("decision", str(decision))
             entry = KnowledgeEntry(
                 project_id=project_id,
                 feature_id=feature.id,
@@ -1539,7 +1909,8 @@ def kb_accumulate_task(self, feature_id: str, kb_artifact_id: str):
 
         # Extract architecture changes
         for change in (content.get("architecture_changes") or []):
-            text = change if isinstance(change, str) else change.get("change", str(change))
+            text = change if isinstance(
+                change, str) else change.get("change", str(change))
             entry = KnowledgeEntry(
                 project_id=project_id,
                 feature_id=feature.id,
@@ -1553,7 +1924,8 @@ def kb_accumulate_task(self, feature_id: str, kb_artifact_id: str):
 
         # Extract lessons learned
         for lesson in (content.get("lessons_learned") or []):
-            text = lesson if isinstance(lesson, str) else lesson.get("lesson", str(lesson))
+            text = lesson if isinstance(
+                lesson, str) else lesson.get("lesson", str(lesson))
             entry = KnowledgeEntry(
                 project_id=project_id,
                 feature_id=feature.id,
@@ -1595,7 +1967,8 @@ def kb_accumulate_task(self, feature_id: str, kb_artifact_id: str):
                 session.add(entry)
 
         session.commit()
-        logger.info(f"Knowledge entries extracted from KB {kb_artifact_id} for feature {feature_id}")
+        logger.info(
+            f"Knowledge entries extracted from KB {kb_artifact_id} for feature {feature_id}")
 
     except Exception as e:
         logger.exception(f"KB accumulation failed for feature {feature_id}")

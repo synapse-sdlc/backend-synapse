@@ -9,8 +9,10 @@ class BedrockProvider(LLMProvider):
     def __init__(self, model: str = "anthropic.claude-sonnet-4-6", region: str = None, bearer_token: str = None):
         import os
         self.model = model
-        self.region = region or os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
-        self.bearer_token = bearer_token or os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "")
+        self.region = region or os.environ.get(
+            "AWS_DEFAULT_REGION", "us-east-1")
+        self.bearer_token = bearer_token or os.environ.get(
+            "AWS_BEARER_TOKEN_BEDROCK", "")
         self.client = None
 
         # Only create boto3 client if no bearer token (bearer uses httpx directly)
@@ -77,10 +79,16 @@ class BedrockProvider(LLMProvider):
                 })
 
         stop = response.get("stopReason", "end_turn")
+        raw_usage = response.get("usage", {})
+        usage = {
+            "input": raw_usage.get("inputTokens", 0),
+            "output": raw_usage.get("outputTokens", 0),
+        }
         return {
             "content": content_text,
             "tool_calls": tool_calls,
             "stop_reason": "tool_use" if stop == "tool_use" else "end_turn",
+            "usage": usage,
         }
 
     def _call_with_boto3(self, request_body):
@@ -128,7 +136,8 @@ class BedrockProvider(LLMProvider):
                 }, json=body)
 
             if resp.status_code >= 400:
-                raise RuntimeError(f"Bedrock API key auth failed ({resp.status_code}): {resp.text[:500]}")
+                raise RuntimeError(
+                    f"Bedrock API key auth failed ({resp.status_code}): {resp.text[:500]}")
             return resp.json()
 
     def _convert_messages(self, messages):
@@ -164,7 +173,8 @@ class BedrockProvider(LLMProvider):
                 tool_ids = []
                 if tool_calls and has_tool_results:
                     for tc in tool_calls:
-                        tool_id = tc.get("id") or f"tool_{uuid.uuid4().hex[:12]}"
+                        tool_id = tc.get(
+                            "id") or f"tool_{uuid.uuid4().hex[:12]}"
                         tool_ids.append(tool_id)
                         content.append({
                             "toolUse": {
@@ -177,13 +187,15 @@ class BedrockProvider(LLMProvider):
                 if not content:
                     content.append({"text": ""})
 
-                bedrock_messages.append({"role": "assistant", "content": content})
+                bedrock_messages.append(
+                    {"role": "assistant", "content": content})
                 i += 1
 
                 tool_results = []
                 tid_idx = 0
                 while i < len(messages) and messages[i]["role"] == "tool":
-                    tool_use_id = tool_ids[tid_idx] if tid_idx < len(tool_ids) else f"tool_{uuid.uuid4().hex[:12]}"
+                    tool_use_id = tool_ids[tid_idx] if tid_idx < len(
+                        tool_ids) else f"tool_{uuid.uuid4().hex[:12]}"
                     tool_results.append({
                         "toolResult": {
                             "toolUseId": tool_use_id,

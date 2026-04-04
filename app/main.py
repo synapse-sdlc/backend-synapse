@@ -1,3 +1,7 @@
+from app.config import settings as _settings
+from app.api import jira, pull_requests, knowledge, skills, webhooks
+from app.api import auth, projects, features, artifacts, stream, health, repositories
+from app.db import engine, Base
 import logging
 from contextlib import asynccontextmanager
 
@@ -9,7 +13,6 @@ logging.basicConfig(
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
 
-from app.db import engine, Base
 # Import all models so Base.metadata.create_all() creates their tables
 import app.models.org  # noqa: F401
 import app.models.user  # noqa: F401
@@ -25,29 +28,31 @@ import app.models.knowledge_entry  # noqa: F401
 import app.models.api_contract  # noqa: F401
 import app.models.shared_model  # noqa: F401
 
-from app.api import auth, projects, features, artifacts, stream, health, repositories
-from app.api import jira, pull_requests, knowledge, skills, webhooks
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Validate required settings at startup
     from app.config import settings
     if settings.jwt_secret == "CHANGE-ME-IN-ENV-FILE":
-        logging.getLogger(__name__).critical("JWT_SECRET not set! Set it in .env or environment.")
+        logging.getLogger(__name__).critical(
+            "JWT_SECRET not set! Set it in .env or environment.")
     if settings.encryption_key == "CHANGE-ME-IN-ENV-FILE":
-        logging.getLogger(__name__).critical("ENCRYPTION_KEY not set! Set it in .env or environment.")
+        logging.getLogger(__name__).critical(
+            "ENCRYPTION_KEY not set! Set it in .env or environment.")
 
     Base.metadata.create_all(bind=engine)
     yield
     engine.dispose()
+    # Flush any buffered Langfuse events before the process exits
+    from core.orchestrator.tracing import flush as langfuse_flush
+    langfuse_flush(blocking=True)
 
 
 app = FastAPI(title="Synapse API", version="0.1.0", lifespan=lifespan)
 
 # CORS origins from config (comma-separated string → list)
-from app.config import settings as _settings
-_cors_origins = [o.strip() for o in _settings.cors_allowed_origins.split(",") if o.strip()]
+_cors_origins = [o.strip()
+                 for o in _settings.cors_allowed_origins.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
@@ -67,5 +72,7 @@ app.include_router(jira.router, prefix="/api", tags=["jira"])
 app.include_router(pull_requests.router, prefix="/api", tags=["pull-requests"])
 app.include_router(knowledge.router, prefix="/api", tags=["knowledge"])
 app.include_router(skills.router, prefix="/api", tags=["skills"])
-app.include_router(webhooks.router, prefix="/api", tags=["webhooks"])
 app.include_router(stream.router, prefix="/api", tags=["stream"])
+# Webhooks mounted WITHOUT /api prefix — external services (GitHub, Jira) call
+# /webhooks/github and /webhooks/jira/{secret} directly.
+app.include_router(webhooks.router, tags=["webhooks"])

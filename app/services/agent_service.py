@@ -29,7 +29,8 @@ PHASE_SKILL_MAP = {
     "qa_review": "qa-testing",
 }
 
-CONVERSATIONAL_PHASES = {"gathering", "spec_review", "plan_review", "qa_review"}
+CONVERSATIONAL_PHASES = {"gathering",
+                         "spec_review", "plan_review", "qa_review"}
 
 # Maps artifact type to the phase it triggers
 ARTIFACT_PHASE_MAP = {
@@ -115,7 +116,8 @@ def load_conversation_history(db: Session, feature_id: str, max_messages: int = 
         elif m["role"] == "tool" and m.get("tool_name") == "store_artifact":
             try:
                 data = json.loads(m["content"])
-                summary_parts.append(f"Stored artifact: {data.get('artifact_id', '?')}")
+                summary_parts.append(
+                    f"Stored artifact: {data.get('artifact_id', '?')}")
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -239,7 +241,8 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
                 feature.spec_artifact_id = aid
                 if feature.phase == "gathering":
                     feature.phase = "spec_review"
-                    logger.info(f"Feature {feature.id}: spec generated, moving to spec_review")
+                    logger.info(
+                        f"Feature {feature.id}: spec generated, moving to spec_review")
                 db.commit()
                 return aid
 
@@ -247,7 +250,8 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
                 feature.plan_artifact_id = aid
                 if feature.phase in ("spec_review", "plan_review"):
                     feature.phase = "plan_review"
-                    logger.info(f"Feature {feature.id}: plan generated, moving to plan_review")
+                    logger.info(
+                        f"Feature {feature.id}: plan generated, moving to plan_review")
                 db.commit()
                 return aid
 
@@ -255,7 +259,8 @@ def check_for_new_artifacts(db: Session, feature: Feature, messages: list) -> Op
                 feature.tests_artifact_id = aid
                 if feature.phase in ("plan_review", "qa_review"):
                     feature.phase = "qa_review"
-                    logger.info(f"Feature {feature.id}: tests generated, moving to qa_review")
+                    logger.info(
+                        f"Feature {feature.id}: tests generated, moving to qa_review")
                 db.commit()
                 return aid
 
@@ -305,10 +310,12 @@ async def run_agent_turn(
     from core.tools.codebase.search_codebase import SearchCodebaseTool
     repo_ids = [
         str(r.id) for r in db.execute(
-            select(Repository).where(Repository.project_id == feature.project_id)
+            select(Repository).where(
+                Repository.project_id == feature.project_id)
         ).scalars().all()
     ]
-    SearchCodebaseTool.set_context(project_id=str(feature.project_id), repo_ids=repo_ids)
+    SearchCodebaseTool.set_context(project_id=str(
+        feature.project_id), repo_ids=repo_ids)
 
     # Load project-level custom skills
     project = db.get(Project, feature.project_id)
@@ -325,6 +332,15 @@ async def run_agent_turn(
         stop_on_text=stop_on_text,
         on_event=on_event,
         custom_skills=project_custom_skills,
+        # Observability: group all turns for this feature into one Langfuse session
+        trace_session_id=str(feature_id),
+        trace_user_id=str(project.org_id) if project else None,
+        trace_metadata={
+            "feature_id": str(feature_id),
+            "project_id": str(feature.project_id),
+            "phase": feature.phase,
+            "skill": skill,
+        },
     )
 
     # Save new messages to DB
@@ -399,6 +415,16 @@ async def run_approval_agent(
         stop_on_text=False,  # Don't stop on text, we want the full artifact
         on_event=on_event,
         custom_skills=project_custom_skills,
+        # Observability: group all turns for this feature into one Langfuse session
+        trace_session_id=str(feature_id),
+        trace_user_id=str(project.org_id) if project else None,
+        trace_metadata={
+            "feature_id": str(feature_id),
+            "project_id": str(feature.project_id),
+            "phase": feature.phase,
+            "skill": skill,
+            "trigger": "approval",
+        },
     )
 
     save_new_messages(db, str(feature_id), old_count, result["messages"])

@@ -21,6 +21,7 @@ class PullRequestLinkResponse(BaseModel):
     files_changed: Optional[list] = None
     commit_messages: Optional[list] = None
     kb_updated: bool
+    deployment_status: Optional[dict] = None
     created_at: datetime
     synced_at: Optional[datetime] = None
 

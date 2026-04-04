@@ -53,10 +53,15 @@ class OllamaProvider(LLMProvider):
                 # Strip the JSON from content since we parsed it as tool calls
                 content = self._strip_tool_json(content)
 
+        usage = {
+            "input": getattr(response, "prompt_eval_count", 0) or 0,
+            "output": getattr(response, "eval_count", 0) or 0,
+        }
         return {
             "content": content,
             "tool_calls": tool_calls,
             "stop_reason": "tool_use" if tool_calls else "end_turn",
+            "usage": usage,
         }
 
     def _convert_tools(self, tools):
@@ -79,7 +84,8 @@ class OllamaProvider(LLMProvider):
 
         # Match JSON objects that look like tool calls
         # Pattern: {"name": "tool_name", "arguments": {...}}
-        json_pattern = re.findall(r'\{[^{}]*"name"\s*:\s*"[^"]+?"[^{}]*"arguments"\s*:\s*\{[^{}]*\}[^{}]*\}', content)
+        json_pattern = re.findall(
+            r'\{[^{}]*"name"\s*:\s*"[^"]+?"[^{}]*"arguments"\s*:\s*\{[^{}]*\}[^{}]*\}', content)
         for match in json_pattern:
             try:
                 parsed = json.loads(match)
@@ -141,6 +147,7 @@ class OllamaProvider(LLMProvider):
         """Remove parsed tool call JSON from the content text."""
         # Remove JSON blocks and code fences
         cleaned = re.sub(r'```(?:json)?\s*\{[\s\S]*?\}\s*```', '', content)
-        cleaned = re.sub(r'\{[^{}]*"(?:name|function)"\s*:\s*"[^"]+?"[^{}]*"arguments"\s*:\s*\{[^{}]*\}[^{}]*\}', '', cleaned)
+        cleaned = re.sub(
+            r'\{[^{}]*"(?:name|function)"\s*:\s*"[^"]+?"[^{}]*"arguments"\s*:\s*\{[^{}]*\}[^{}]*\}', '', cleaned)
         cleaned = cleaned.strip()
         return cleaned
