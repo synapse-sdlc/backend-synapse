@@ -141,3 +141,45 @@ def get_optional_user(
         role=payload.get("role", "admin"),
         name=payload.get("name", ""),
     )
+
+
+def verify_extension_token(
+    project_id: UUID,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db),
+) -> None:
+    """Validate the VS Code extension bearer token stored in the DB for this project.
+
+    If no token is configured for the project, all requests are rejected.
+    """
+    import secrets
+    from sqlalchemy import select
+    from app.models.extension_config import ExtensionConfig
+    from app.utils.crypto import decrypt_token
+
+    cfg = db.execute(
+        select(ExtensionConfig).where(ExtensionConfig.project_id == project_id)
+    ).scalars().first()
+
+    if not cfg:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Extension token not configured for this project",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not credentials or not credentials.credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Extension token required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    expected = decrypt_token(cfg.token_encrypted)
+    # Constant-time comparison to prevent timing attacks
+    if not secrets.compare_digest(credentials.credentials, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid extension token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )

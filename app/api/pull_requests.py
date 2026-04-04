@@ -144,8 +144,9 @@ async def sync_pr(
     link.merged_at = pr_data.get("merged_at")
     link.synced_at = datetime.utcnow()
 
-    # If newly merged, fetch diff details
-    if link.state == "merged" and was_open:
+    # Fetch diff details when merged and data is missing (on transition OR backfill)
+    needs_files = link.state == "merged" and link.files_changed is None
+    if needs_files:
         try:
             link.files_changed = await svc.get_pr_files(owner, repo, link.pr_number)
             link.commit_messages = await svc.get_pr_commits(owner, repo, link.pr_number)
@@ -155,7 +156,7 @@ async def sync_pr(
         except Exception:
             pass  # Non-critical if diff fetch fails
 
-        # Trigger KB update from PR
+        # Trigger KB update if not already done
         if not link.kb_updated:
             from app.workers.tasks import pr_kb_update_task
             pr_kb_update_task.delay(str(feature_id), str(pr_link_id))

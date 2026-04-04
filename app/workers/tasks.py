@@ -644,7 +644,8 @@ def analyze_codebase_task(self, project_id: str, github_url: str):
         chunks = chunk_analysis_results(analysis)
         store = VectorStore()
         store.add_chunks(chunks)
-        logger.info(f"Indexed {len(chunks)} chunks into default collection for project {project_id[:8]}")
+        logger.info(
+            f"Indexed {len(chunks)} chunks into default collection for project {project_id[:8]}")
 
         codebase_context = build_context_summary(analysis, local_repo_path)
         project.codebase_context = codebase_context
@@ -1288,10 +1289,18 @@ def pr_sync_task(self, feature_id: str):
             return
 
         svc = GitHubService(token)
+        # Include open PRs (to detect merges) and merged PRs missing file data (backfill)
+        from sqlalchemy import or_, and_
         links = session.execute(
             select(PullRequestLink).where(
                 PullRequestLink.feature_id == feature_id,
-                PullRequestLink.state == "open",
+                or_(
+                    PullRequestLink.state == "open",
+                    and_(
+                        PullRequestLink.state == "merged",
+                        PullRequestLink.files_changed.is_(None),
+                    ),
+                ),
             )
         ).scalars().all()
 
@@ -1305,7 +1314,8 @@ def pr_sync_task(self, feature_id: str):
                 link.merged_at = pr_data.get("merged_at")
                 link.synced_at = datetime.utcnow()
 
-                if link.state == "merged" and not link.kb_updated:
+                # Fetch files/commits when merged and data is missing (new merge or backfill)
+                if link.state == "merged" and link.files_changed is None:
                     link.files_changed = asyncio.run(
                         svc.get_pr_files(owner, repo, link.pr_number))
                     link.commit_messages = asyncio.run(
@@ -1313,7 +1323,8 @@ def pr_sync_task(self, feature_id: str):
                     diff = asyncio.run(svc.get_pr_diff(
                         owner, repo, link.pr_number))
                     link.diff_summary = diff[:5000] if diff else None
-                    pr_kb_update_task.delay(str(feature_id), str(link.id))
+                    if not link.kb_updated:
+                        pr_kb_update_task.delay(str(feature_id), str(link.id))
             except Exception as e:
                 logger.warning(f"Failed to sync PR {link.pr_url}: {e}")
 

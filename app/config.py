@@ -157,7 +157,8 @@ def get_provider(model_tier=None):
             guardrail_version=settings.bedrock_guardrail_version or "DRAFT",
         )
     else:
-        raise ValueError(f"Unknown provider: {provider_name}. Set SYNAPSE_PROVIDER to 'ollama' or 'bedrock'.")
+        raise ValueError(
+            f"Unknown provider: {provider_name}. Set SYNAPSE_PROVIDER to 'ollama' or 'bedrock'.")
 
 
 def get_available_tiers():
