@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     synapse_provider: str = "ollama"
     synapse_model: str = "qwen3:8b"
     synapse_bedrock_model: str = "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+    bedrock_model_fast: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    bedrock_model_balanced: str = "us.anthropic.claude-sonnet-4-6"
+    bedrock_model_powerful: str = "us.anthropic.claude-opus-4-6"
     aws_default_region: str = "us-east-1"
 
     # AWS credentials — three options (checked in order):
@@ -59,36 +62,40 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-MODEL_TIERS = {
-    "bedrock": {
-        "fast": {
-            "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            "label": "Fast",
-            "description": "Quick drafts and simple tasks (~3x faster)",
-            "speed": "~200 tok/s",
-            "icon": "zap",
+def _build_model_tiers():
+    return {
+        "bedrock": {
+            "fast": {
+                "model_id": settings.bedrock_model_fast,
+                "label": "Fast",
+                "description": "Quick drafts and simple tasks (~3x faster)",
+                "speed": "~200 tok/s",
+                "icon": "zap",
+            },
+            "balanced": {
+                "model_id": settings.bedrock_model_balanced,
+                "label": "Balanced",
+                "description": "Best for most tasks (recommended)",
+                "speed": "~70 tok/s",
+                "icon": "star",
+            },
+            "powerful": {
+                "model_id": settings.bedrock_model_powerful,
+                "label": "Powerful",
+                "description": "Complex features, large codebases",
+                "speed": "~30 tok/s",
+                "icon": "diamond",
+            },
         },
-        "balanced": {
-            "model_id": "us.anthropic.claude-sonnet-4-6",
-            "label": "Balanced",
-            "description": "Best for most tasks (recommended)",
-            "speed": "~70 tok/s",
-            "icon": "star",
+        "ollama": {
+            "fast": {"model_id": "qwen3:8b", "label": "Fast", "description": "Quick local inference", "speed": "Fast", "icon": "zap"},
+            "balanced": {"model_id": "qwen3:8b", "label": "Balanced", "description": "Default local model", "speed": "Medium", "icon": "star"},
+            "powerful": {"model_id": "qwen3:32b", "label": "Powerful", "description": "Higher quality, slower", "speed": "Slow", "icon": "diamond"},
         },
-        "powerful": {
-            "model_id": "us.anthropic.claude-opus-4-6",
-            "label": "Powerful",
-            "description": "Complex features, large codebases",
-            "speed": "~30 tok/s",
-            "icon": "diamond",
-        },
-    },
-    "ollama": {
-        "fast": {"model_id": "qwen3:8b", "label": "Fast", "description": "Quick local inference", "speed": "Fast", "icon": "zap"},
-        "balanced": {"model_id": "qwen3:8b", "label": "Balanced", "description": "Default local model", "speed": "Medium", "icon": "star"},
-        "powerful": {"model_id": "qwen3:32b", "label": "Powerful", "description": "Higher quality, slower", "speed": "Slow", "icon": "diamond"},
-    },
-}
+    }
+
+
+MODEL_TIERS = _build_model_tiers()
 
 
 def get_provider(model_tier=None):
