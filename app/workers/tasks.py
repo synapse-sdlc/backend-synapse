@@ -1611,7 +1611,10 @@ def webhook_pr_update_task(
         ).scalars().all()
 
         if not links:
-            if action in ("opened", "closed"):
+            if action in ("opened", "closed", "edited"):
+                # "edited" is included so that a PR previously removed due to an
+                # invalid Jira key can be re-created when the title is corrected
+                # to a key that exists in the DB / Jira.
                 _auto_create_pr_link(
                     session, repo_full_name, pr_number, pr_payload)
             else:
@@ -1641,6 +1644,58 @@ def webhook_pr_update_task(
                     or (_title_match and _title_match.group(1).upper().replace('_', '-'))
                 )
                 if new_jira_key and new_jira_key != link.jira_issue_key:
+                    # On title edits validate the new key exists in Jira before
+                    # updating.  If it cannot be found, remove the PR link so
+                    # stale / mistyped ticket references don't pollute the list.
+                    if action == "edited":
+                        from app.models.jira_issue_link import JiraIssueLink as _JIL
+                        key_in_db = bool(
+                            session.execute(
+                                select(_JIL).where(_JIL.issue_key == new_jira_key)
+                            ).scalar_one_or_none()
+                            or session.execute(
+                                select(Feature).where(
+                                    Feature.jira_epic_key == new_jira_key)
+                            ).scalar_one_or_none()
+                        )
+                        if not key_in_db:
+                            # DB has no record — ask Jira directly as fallback
+                            key_in_jira = False
+                            try:
+                                from app.models.jira_config import JiraConfig as _JC
+                                from app.services.jira_service import JiraService as _JS
+                                from app.utils.crypto import decrypt_token as _dt
+                                _feat = session.get(Feature, link.feature_id)
+                                if _feat:
+                                    _cfg = session.execute(
+                                        select(_JC).where(
+                                            _JC.project_id == _feat.project_id)
+                                    ).scalar_one_or_none()
+                                    if _cfg:
+                                        _jira_svc = _JS(
+                                            _cfg.site_url,
+                                            _cfg.user_email,
+                                            _dt(_cfg.api_token_encrypted),
+                                        )
+                                        asyncio.run(_jira_svc.get_issue(new_jira_key))
+                                        key_in_jira = True
+                            except Exception:
+                                key_in_jira = False
+
+                        if not key_in_db and not key_in_jira:
+                            logger.info(
+                                "webhook_pr_update_task: new Jira key %r not found "
+                                "in DB or Jira; removing PR link %s",
+                                new_jira_key, link.id,
+                            )
+                            session.delete(link)
+                            _publish_feature_event(feature_id, {
+                                "type": "pr_removed",
+                                "pr_url": link.pr_url,
+                                "jira_issue_key": new_jira_key,
+                            })
+                            continue
+
                     link.jira_issue_key = new_jira_key
 
             if action == "edited":
