@@ -9,13 +9,15 @@ celery_app = Celery(
 
 if settings.sentry_dsn:
     import sentry_sdk
+    from sentry_sdk.integrations.celery import CeleryIntegration
+    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
         environment=settings.sentry_environment,
         traces_sample_rate=settings.sentry_traces_sample_rate,
         integrations=[
-            sentry_sdk.integrations.celery.CeleryIntegration(monitor_beat_tasks=True),
-            sentry_sdk.integrations.sqlalchemy.SqlalchemyIntegration(),
+            CeleryIntegration(monitor_beat_tasks=True),
+            SqlalchemyIntegration(),
         ],
         send_default_pii=False,
     )

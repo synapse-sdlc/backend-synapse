@@ -10,14 +10,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 if _settings.sentry_dsn:
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+    from sentry_sdk.integrations.asyncio import AsyncioIntegration
     sentry_sdk.init(
         dsn=_settings.sentry_dsn,
         environment=_settings.sentry_environment,
         traces_sample_rate=_settings.sentry_traces_sample_rate,
         integrations=[
-            sentry_sdk.integrations.fastapi.FastApiIntegration(),
-            sentry_sdk.integrations.sqlalchemy.SqlalchemyIntegration(),
-            sentry_sdk.integrations.asyncio.AsyncioIntegration(),
+            FastApiIntegration(),
+            SqlalchemyIntegration(),
+            AsyncioIntegration(),
         ],
         send_default_pii=False,
     )
