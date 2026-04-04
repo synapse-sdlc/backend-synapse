@@ -94,7 +94,7 @@ def get_jira_config(
     from app.config import settings as _s
     resp = JiraConfigResponse.model_validate(config)
     if config.webhook_secret:
-        resp.webhook_url = f"{_s.public_url.rstrip('/')}/api/webhooks/jira/{config.webhook_secret}"
+        resp.webhook_url = f"{_s.public_url.rstrip('/')}/webhooks/jira/{config.webhook_secret}"
     return resp
 
 

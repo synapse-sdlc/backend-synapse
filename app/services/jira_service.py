@@ -191,7 +191,7 @@ class JiraService:
         jql = f"key in ({','.join(issue_keys)})"
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"{self.base_url}/rest/api/3/search",
+                f"{self.base_url}/rest/api/3/search/jql",
                 headers=self.headers,
                 json={
                     "jql": jql,
