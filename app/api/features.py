@@ -276,6 +276,60 @@ def reject_artifact(
     return {"status": "rejected", "phase": feature.phase, "feature_id": str(feature_id)}
 
 
+@router.post("/features/{feature_id}/rollback", status_code=200)
+def rollback_feature(
+    feature_id: UUID,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Roll back to the previous agent phase without triggering revision."""
+    feature = _verify_feature_access(db, feature_id, user)
+
+    phase = feature.phase
+
+    # Maps current phase → (previous phase, artifact field to clear, previous artifact field to set to draft)
+    rollback_map = {
+        "qa_review":   ("plan_review", "tests_artifact_id", "plan_artifact_id"),
+        "plan_review": ("spec_review",  "plan_artifact_id",  "spec_artifact_id"),
+    }
+
+    if phase not in rollback_map:
+        raise HTTPException(status_code=400, detail=f"Cannot roll back from phase: {phase}")
+
+    prev_phase, current_artifact_field, prev_artifact_field = rollback_map[phase]
+
+    # Mark current phase's artifact as rolled_back and detach it
+    current_artifact_id = getattr(feature, current_artifact_field)
+    if current_artifact_id:
+        artifact = db.get(Artifact, current_artifact_id)
+        if artifact:
+            artifact.status = "rolled_back"
+        setattr(feature, current_artifact_field, None)
+
+    # Set previous phase's artifact back to draft so user must re-approve
+    prev_artifact_id = getattr(feature, prev_artifact_field)
+    if prev_artifact_id:
+        prev_artifact = db.get(Artifact, prev_artifact_id)
+        if prev_artifact:
+            prev_artifact.status = "draft"
+
+    feature.phase = prev_phase
+
+    phase_label = {"plan_review": "tech plan review", "spec_review": "spec review"}
+    rollback_msg = Message(
+        feature_id=feature_id,
+        role="user",
+        content=f"{user.name or 'User'} rolled back to {phase_label.get(prev_phase, prev_phase)}.",
+        user_id=user.id,
+        user_name=user.name or "User",
+    )
+    db.add(rollback_msg)
+    db.commit()
+    db.refresh(feature)
+
+    return {"status": "rolled_back", "phase": feature.phase, "feature_id": str(feature_id)}
+
+
 @router.post("/features/{feature_id}/close", status_code=200)
 def close_feature(
     feature_id: UUID,
