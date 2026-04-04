@@ -50,11 +50,10 @@ class GetArtifactTool:
 
         # 2. Pull from S3 → local cache (if S3 configured)
         try:
-            artifact = _pull_from_s3(artifact_id)
+            artifact = _pull_from_s3(artifact_id, self._context_project_id)
             if artifact:
                 logger.info(f"get_artifact {artifact_id}: pulled from S3, cached locally")
-                ARTIFACT_DIR.mkdir(exist_ok=True)
-                filepath.write_text(json.dumps(artifact, indent=2))
+                self._cache_locally(artifact_id, artifact)
                 return artifact
         except Exception as e:
             logger.debug(f"S3 pull failed for {artifact_id}: {e}")
@@ -63,15 +62,28 @@ class GetArtifactTool:
         try:
             artifact = _pull_from_db(artifact_id)
             if artifact:
-                logger.info(f"get_artifact {artifact_id}: loaded from DB")
+                logger.info(f"get_artifact {artifact_id}: loaded from DB, cached locally")
+                self._cache_locally(artifact_id, artifact)
                 return artifact
         except Exception as e:
             logger.debug(f"DB pull failed for {artifact_id}: {e}")
 
         return {"error": f"Artifact not found: {artifact_id}"}
 
+    def _cache_locally(self, artifact_id, artifact):
+        """Cache artifact to project-scoped local dir for fast subsequent reads."""
+        try:
+            if self._context_project_id:
+                cache_dir = ARTIFACT_DIR / self._context_project_id
+            else:
+                cache_dir = ARTIFACT_DIR
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            (cache_dir / f"{artifact_id}.json").write_text(json.dumps(artifact, indent=2))
+        except Exception as e:
+            logger.debug(f"Failed to cache artifact {artifact_id} locally: {e}")
 
-def _pull_from_s3(artifact_id: str):
+
+def _pull_from_s3(artifact_id: str, project_id: str = None):
     """Pull artifact JSON from S3."""
     import os, boto3
     bucket = os.environ.get("S3_BUCKET", "")
@@ -80,11 +92,18 @@ def _pull_from_s3(artifact_id: str):
     prefix = os.environ.get("S3_ARTIFACTS_PREFIX", "artifacts")
     region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
     s3 = boto3.client("s3", region_name=region)
-    try:
-        resp = s3.get_object(Bucket=bucket, Key=f"{prefix}/{artifact_id}.json")
-        return json.loads(resp["Body"].read().decode("utf-8"))
-    except Exception:
-        return None
+    # Try project-scoped key first, then flat fallback
+    keys = []
+    if project_id:
+        keys.append(f"{prefix}/{project_id}/{artifact_id}.json")
+    keys.append(f"{prefix}/{artifact_id}.json")
+    for key in keys:
+        try:
+            resp = s3.get_object(Bucket=bucket, Key=key)
+            return json.loads(resp["Body"].read().decode("utf-8"))
+        except Exception:
+            continue
+    return None
 
 
 def _pull_from_db(artifact_id: str):
